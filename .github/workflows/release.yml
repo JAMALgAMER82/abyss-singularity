@@ -1,0 +1,105 @@
+# Abyss Singularity — auto-release on git tag.
+#
+# Trigger: push a tag like `v0.2.0`.
+#   git tag v0.2.0
+#   git push --tags
+#
+# What it does:
+#   1. Builds the app in release mode on Windows
+#   2. Signs the installer + nsis-zip with TAURI_SIGNING_PRIVATE_KEY
+#   3. Creates a GitHub Release for the tag
+#   4. Uploads the installer, nsis.zip, .sig, and latest.json
+#   5. Marks `latest.json` as the manifest the running app reads
+#
+# One-time setup (in the GitHub repo's Settings → Secrets):
+#   - TAURI_SIGNING_PRIVATE_KEY          ← contents of ~/.tauri/abyss-singularity.key
+#   - TAURI_SIGNING_PRIVATE_KEY_PASSWORD ← SKIP THIS for keys generated with `--password ""`.
+#                                          GitHub doesn't allow empty-string secrets, and the
+#                                          build doesn't need this env var when the key file
+#                                          itself has no passphrase. The reference below
+#                                          resolves to "" if the secret is absent, which is
+#                                          exactly what tauri-cli ignores cleanly.
+#
+# After that, the entire release pipeline is `git tag && git push --tags`.
+# The endpoint in src-tauri/tauri.conf.json should be:
+#   https://github.com/<OWNER>/<REPO>/releases/latest/download/latest.json
+
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: windows-latest
+    permissions:
+      contents: write    # needed to create the GitHub Release + upload assets
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          profile:   minimal
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      # The Go mesh sidecar — must exist in src-tauri/binaries/ before
+      # `tauri build` bundles it.
+      - name: Build mesh sidecar
+        shell: pwsh
+        run: |
+          $env:CGO_ENABLED = "0"
+          $out = "src-tauri\binaries\abyss-mesh-x86_64-pc-windows-msvc.exe"
+          Push-Location src-mesh
+          go build -ldflags="-s -w" -trimpath -o "..\$out" .
+          Pop-Location
+
+      - name: Install JS deps
+        run: npm ci
+
+      - name: Build + sign release
+        env:
+          TAURI_SIGNING_PRIVATE_KEY:          ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npm run tauri build
+
+      - name: Generate latest.json
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}" -replace '^v',''
+          $bundle  = "src-tauri\target\release\bundle\nsis"
+          $nsisZip = Get-ChildItem "$bundle\*_x64-setup.nsis.zip" | Select-Object -First 1
+          $sig     = Get-Content (Get-ChildItem "$bundle\*_x64-setup.nsis.zip.sig" | Select-Object -First 1).FullName -Raw
+          $repo    = "${{ github.repository }}"
+          $tag     = "${{ github.ref_name }}"
+          $manifest = [ordered]@{
+            version   = $version
+            notes     = "Release $tag"
+            pub_date  = (Get-Date -AsUTC).ToString("yyyy-MM-ddTHH:mm:ssZ")
+            platforms = [ordered]@{
+              "windows-x86_64" = [ordered]@{
+                signature = $sig.Trim()
+                url       = "https://github.com/$repo/releases/download/$tag/$($nsisZip.Name)"
+              }
+            }
+          }
+          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+          $manifest | ConvertTo-Json -Depth 6 | Set-Content artifacts\latest.json -Encoding UTF8
+          Copy-Item "$bundle\*_x64-setup.exe"          artifacts\
+          Copy-Item "$bundle\*_x64-setup.nsis.zip"     artifacts\
+          Copy-Item "$bundle\*_x64-setup.nsis.zip.sig" artifacts\
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true

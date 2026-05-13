@@ -1,0 +1,28 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Default capabilities for the main window. Allows window control (drag/min/max/close), app logging, library JSON store, folder-picker dialogs, scoped FS reads, and spawning the bundled `abyss-mesh` sidecar that provides the embedded Tailscale mesh.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-minimize",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-close",
+    "core:window:allow-start-dragging",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "core:path:default",
+    "opener:default",
+    "log:default",
+    "store:default",
+    "dialog:default",
+    "fs:default",
+    "updater:default",
+    {
+      "identifier": "shell:allow-spawn",
+      "allow": [
+        { "name": "binaries/abyss-mesh", "sidecar": true, "args": true }
+      ]
+    }
+  ]
+}

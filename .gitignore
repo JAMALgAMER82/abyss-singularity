@@ -1,0 +1,41 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Rust / Cargo
+src-tauri/target/
+**/target/
+
+# Tauri build artefacts
+src-tauri/gen/
+src-tauri/binaries/
+release-output/
+
+# Go module cache + binary output (mesh sidecar rebuilds from src-mesh/)
+src-mesh/go.sum
+
+# Signing keys — MUST NEVER be committed
+*.key
+*.key.pub
+.tauri/

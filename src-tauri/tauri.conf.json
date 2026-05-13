@@ -1,0 +1,67 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Abyss Singularity",
+  "version": "0.1.0",
+  "identifier": "com.abyss.singularity",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/JAMALgAMER82/abyss-singularity/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDE2RTY3QTQyMzA0OUFFRkEKUldUNnJra3dRbnJtRmlUN0pldDYvditpMkVIL29Tc3dUVlI2MnRzTHZOOHJuWEw1NVNBbS8xWVEK",
+      "windows": { "installMode": "passive" }
+    }
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Abyss Singularity",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 960,
+        "minHeight": 600,
+        "decorations": false,
+        "transparent": false,
+        "resizable": true,
+        "center": true,
+        "backgroundColor": "#05070a"
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "createUpdaterArtifacts": true,
+    "targets": ["nsis"],
+    "publisher": "Abyss Singularity",
+    "copyright": "Copyright © 2026 Abyss Singularity",
+    "category": "Game",
+    "shortDescription": "Cross-continental co-op gaming hub.",
+    "longDescription": "Abyss Singularity is an all-in-one gaming orchestrator: scans your local game/ROM library, enriches it with IGDB metadata, launches emulators with optimal arguments, probes regional latency for mesh co-op, and manages Sunshine/Moonlight streaming sessions. Includes an embedded Tailscale-compatible mesh so no separate VPN install is required.",
+    "externalBin": ["binaries/abyss-mesh"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": ["English"],
+        "displayLanguageSelector": false,
+        "installerIcon": "icons/icon.ico"
+      }
+    }
+  }
+}
