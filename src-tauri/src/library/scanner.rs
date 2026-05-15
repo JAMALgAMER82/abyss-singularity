@@ -5,6 +5,7 @@
 //! [`super::commands`] is responsible for offloading to
 //! `tauri::async_runtime::spawn_blocking` so the UI stays responsive.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -14,6 +15,58 @@ use walkdir::WalkDir;
 
 use super::platforms::{platform_for_extension, refine_ambiguous};
 use super::types::{LibraryEntry, Platform, ScanProgressEvent, ScanReport};
+
+/// Flags describing which descriptor files (`.cue`, `.m3u`, `.gdi`, `.toc`,
+/// `.ccd`) live in a particular directory. Used by [`is_claimed_by_sibling`]
+/// to drop redundant disc-track files that a descriptor already represents
+/// — e.g. a PS1 rip with 12 `Track NN.bin` files plus one `.cue` should
+/// produce a single library entry (the cue), not 13.
+#[derive(Default, Clone, Copy)]
+struct DescriptorPresence {
+    m3u: bool,
+    cue: bool,
+    gdi: bool,
+    toc: bool,
+    ccd: bool,
+}
+
+fn read_descriptor_presence(dir: &Path) -> DescriptorPresence {
+    let mut out = DescriptorPresence::default();
+    let Ok(rd) = std::fs::read_dir(dir) else { return out };
+    for ent in rd.flatten() {
+        let p = ent.path();
+        let Some(ext) = p.extension().and_then(|e| e.to_str()) else { continue };
+        match ext.to_ascii_lowercase().as_str() {
+            "m3u" => out.m3u = true,
+            "cue" => out.cue = true,
+            "gdi" => out.gdi = true,
+            "toc" => out.toc = true,
+            "ccd" => out.ccd = true,
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Returns true when this file is redundant given the sibling descriptors —
+/// the descriptor already represents the same disc, so indexing the raw
+/// data file would just add a duplicate library entry.
+fn is_claimed_by_sibling(ext_lower: &str, siblings: DescriptorPresence) -> bool {
+    match ext_lower {
+        // CD-ROM raw data tracks — referenced by a top-level descriptor.
+        "bin" => siblings.cue || siblings.gdi || siblings.toc || siblings.ccd,
+        "img" => siblings.ccd || siblings.cue,
+        "iso" => siblings.cue || siblings.m3u,
+        "raw" => siblings.gdi || siblings.cue,
+        "sub" => siblings.ccd,
+        // Compressed variants of `.bin`: ECM (Error Code Modeler) and
+        // its modern replacement; same disc, different on-disk shape.
+        "ecm" => siblings.cue || siblings.gdi || siblings.toc || siblings.ccd,
+        // Cue/gdi themselves are claimed by a higher-level m3u playlist.
+        "cue" | "gdi" => siblings.m3u,
+        _ => false,
+    }
+}
 
 const MAX_DEPTH: usize = 6;
 /// Files smaller than this are ignored — most legitimate ROMs/binaries
@@ -59,6 +112,11 @@ pub fn scan_collect(
         elapsed_ms: 0,
     };
 
+    // Memoised "what descriptor files live in this directory" — populated
+    // lazily as we visit each game file and consulted to suppress redundant
+    // disc-track entries.
+    let mut descriptor_cache: HashMap<PathBuf, DescriptorPresence> = HashMap::new();
+
     for root in roots {
         if !root.exists() {
             log::warn!("library: scan path missing: {}", root.display());
@@ -97,12 +155,38 @@ pub fn scan_collect(
             let Some(mut platform) = platform_for_extension(&ext_lower) else {
                 continue;
             };
-            platform = refine_ambiguous(platform, path);
 
-            let Ok(metadata) = entry.metadata() else { continue };
-            if metadata.len() < MIN_FILE_BYTES {
+            // Disc-track deduplication: when a directory holds a `.cue`,
+            // its sibling `.bin` files are just the data/audio tracks the
+            // cue points at. The cue is the canonical "game". Same idea
+            // for `.gdi`/`.toc`/`.ccd` claiming `.bin`/`.img`/`.raw`, and
+            // an `.m3u` playlist claiming all the `.cue`s under it (multi-
+            // disc games). Fixes "Twisted Metal 2 appears 12 times".
+            let parent_dir = path.parent().unwrap_or(path);
+            let siblings = *descriptor_cache
+                .entry(parent_dir.to_path_buf())
+                .or_insert_with(|| read_descriptor_presence(parent_dir));
+            if is_claimed_by_sibling(&ext_lower, siblings) {
                 continue;
             }
+
+            let Ok(metadata) = entry.metadata() else { continue };
+            // Descriptor files (.cue, .m3u, .gdi, .toc) are deliberately
+            // tiny — they're text pointing at the real disc image. Don't
+            // size-filter them or we'd silently drop every PS1/Saturn cue
+            // (Twisted Metal 2 [SCUS-94306].cue is 1 KB).
+            let is_descriptor = matches!(
+                ext_lower.as_str(),
+                "cue" | "m3u" | "gdi" | "toc" | "ccd"
+            );
+            if !is_descriptor && metadata.len() < MIN_FILE_BYTES {
+                continue;
+            }
+            let file_name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("");
+            platform = refine_ambiguous(platform, path, file_name, metadata.len());
 
             if let Some(record) = build_entry(path, &metadata, &ext_lower, platform) {
                 seen_ids.insert(record.id.clone());
@@ -117,7 +201,12 @@ pub fn scan_collect(
                         existing.extension        = record.extension;
                         existing.size_bytes       = record.size_bytes;
                         existing.modified         = record.modified;
-                        existing.platform         = record.platform;
+                        // Never downgrade a specific platform to Other on
+                        // re-scan; that would wipe manual overrides and any
+                        // refinement gained from a subsequent folder move.
+                        if existing.platform == Platform::Other || record.platform != Platform::Other {
+                            existing.platform = record.platform;
+                        }
                         report.games_kept += 1;
                     }
                     None => {
@@ -185,7 +274,7 @@ fn build_entry(
 
 /// Lower-case and strip common ROM-tag clutter so the hash is stable
 /// across e.g. " (USA)" / " [!]" annotation variations on the same dump.
-pub(super) fn normalise_for_hash(stem: &str) -> String {
+pub(crate) fn normalise_for_hash(stem: &str) -> String {
     let mut out = String::with_capacity(stem.len());
     let mut depth_paren = 0i32;
     let mut depth_brack = 0i32;

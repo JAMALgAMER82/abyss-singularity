@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { NetplaySection } from "../components/NetplaySection";
 import {
   streamAddHost,
   streamGetConfig,
   streamHostStatus,
   streamLaunchClient,
+  streamPairClient,
   streamRemoveHost,
+  streamResetCredentials,
   streamStartHost,
   streamStopHost,
   type HostStatus,
@@ -29,10 +32,29 @@ export function StreamView() {
     } catch (e) { setError(String(e)); }
   }, []);
 
+  // Stream view polling: refresh on mount, then every 10s while the tab
+  // is visible. Each refresh calls `streamHostStatus` which on Windows
+  // invokes `sc query` (process spawn, even though we now suppress the
+  // console flash via CREATE_NO_WINDOW). Polling every 3s made the tab
+  // feel laggy; 10s is plenty for "is Sunshine still running" without
+  // burning CPU. Pausing while the tab is hidden saves more when the
+  // user is in Library/Friends.
   useEffect(() => {
     refresh();
-    const t = setInterval(refresh, 3000);
-    return () => clearInterval(t);
+    let t: ReturnType<typeof setInterval> | null = null;
+    const startTimer = () => {
+      if (t === null) t = setInterval(refresh, 10000);
+    };
+    const stopTimer = () => {
+      if (t !== null) { clearInterval(t); t = null; }
+    };
+    startTimer();
+    const onVis = () => { document.hidden ? stopTimer() : (refresh(), startTimer()); };
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      document.removeEventListener("visibilitychange", onVis);
+      stopTimer();
+    };
   }, [refresh]);
 
   const startHost = useCallback(async () => {
@@ -136,7 +158,15 @@ export function StreamView() {
             >
               Open admin UI ↗
             </button>
+            <ResetCredsButton
+              configured={Boolean(host?.configured)}
+              hasCreds={Boolean(config?.sunshine_admin_user && config?.sunshine_admin_pass)}
+              onError={setError}
+              onDone={() => refresh()}
+            />
           </div>
+
+          <PairClientPanel hostRunning={host?.running ?? false} config={config} />
         </section>
 
         {/* ============================== CLIENT ========================== */}
@@ -210,6 +240,11 @@ export function StreamView() {
             </>
           )}
         </section>
+
+        {/* ============================== NETPLAY ========================== */}
+        <div className="lg:col-span-2">
+          <NetplaySection />
+        </div>
       </div>
 
       {error && (
@@ -249,3 +284,216 @@ const inputCls = `
   text-xs text-abyss-fg placeholder:text-abyss-fg-dim
   focus:border-abyss-accent/60 focus:outline-none
 `;
+
+/**
+ * "Reset Sunshine credentials" button. Forces a fresh `sunshine --creds`
+ * invocation so the in-app auto-pair flow works on machines where Sunshine
+ * was installed manually (and the install-time auto-setup never fired).
+ * One UAC prompt; new credentials persisted to StreamingConfig.
+ */
+function ResetCredsButton({
+  configured,
+  hasCreds,
+  onError,
+  onDone,
+}: {
+  configured: boolean;
+  hasCreds:   boolean;
+  onError:    (msg: string | null) => void;
+  onDone:     () => void;
+}) {
+  const [busy,    setBusy]    = useState(false);
+  const [report,  setReport]  = useState<{ user: string; pass: string } | null>(null);
+  const [reveal,  setReveal]  = useState(false);
+
+  const reset = useCallback(async () => {
+    onError(null);
+    setBusy(true);
+    setReport(null);
+    try {
+      const r = await streamResetCredentials();
+      setReport(r);
+      onDone();
+    } catch (e) { onError(String(e)); }
+    finally { setBusy(false); }
+  }, [onError, onDone]);
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={reset}
+        disabled={busy || !configured}
+        title={hasCreds
+          ? "Sunshine admin creds are already set in Abyss. Click to rotate them anyway."
+          : "Generate Sunshine admin credentials so the in-app auto-pair flow can talk to Sunshine. One UAC prompt."}
+        className={`${secondaryBtn} ${hasCreds ? "" : "border-abyss-warning/40 text-abyss-warning hover:border-abyss-warning/60"}`}
+      >
+        {busy ? "Resetting…" : hasCreds ? "Rotate Sunshine creds" : "Set Sunshine creds"}
+      </button>
+      {report && (
+        <span className="ml-1 inline-flex items-center gap-1 rounded-md border border-abyss-success/40 bg-abyss-success/10 px-2 py-1 text-[11px] text-abyss-success">
+          ✓ {report.user}/
+          <code
+            className="cursor-pointer font-mono"
+            onClick={() => setReveal((r) => !r)}
+            title="click to reveal/hide"
+          >
+            {reveal ? report.pass : "•".repeat(report.pass.length)}
+          </code>
+          <button
+            type="button"
+            onClick={() => { navigator.clipboard?.writeText(report.pass).catch(() => {}); }}
+            className="text-abyss-fg-dim underline-offset-2 hover:underline"
+          >
+            copy
+          </button>
+        </span>
+      )}
+    </>
+  );
+}
+
+/**
+ * In-app Sunshine pairing — saves the friend from opening Sunshine's web UI.
+ * Friend opens Moonlight → adds the host → Moonlight shows a 4-digit PIN →
+ * host pastes it here → Abyss POSTs the PIN straight to Sunshine's REST
+ * `/api/pin` endpoint. The new auto-pair flow under Friends → "stream"
+ * does the same thing without the PIN-reading-aloud step; this panel is
+ * still useful for manual pairing from an external Moonlight client.
+ *
+ * `config` is owned by the parent StreamView so credential changes (e.g.
+ * the user clicking "Set Sunshine creds" above) flow through immediately
+ * instead of being cached locally and going stale.
+ */
+function PairClientPanel({
+  hostRunning,
+  config,
+}: {
+  hostRunning: boolean;
+  config:      StreamingConfig | null;
+}) {
+  const [pin, setPin]   = useState("");
+  const [name, setName] = useState("");
+  const [user, setUser] = useState("");
+  const [pass, setPass] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg]   = useState<string | null>(null);
+  const [ok, setOk]     = useState(false);
+
+  // Source of truth for "do we have admin creds?" — derived from the
+  // config the parent fetched/refreshed. Was a useState + useEffect-once
+  // cache before, which went stale after the "Set Sunshine creds" button
+  // populated config behind our back.
+  const credsKnown = config === null
+    ? null
+    : Boolean(config.sunshine_admin_user && config.sunshine_admin_pass);
+
+  const pinValid       = pin.length === 4;
+  const credsProvided  = credsKnown === true || (user.length > 0 && pass.length > 0);
+  const canSubmit      = hostRunning && pinValid && credsProvided && !busy;
+
+  const blockedReason: string | null =
+    !hostRunning ? "Start the host first"
+    : !pinValid  ? `${4 - pin.length} more digit${(4 - pin.length) === 1 ? "" : "s"}`
+    : credsKnown === false && !credsProvided ? "Enter Sunshine creds"
+    : null;
+
+  const submit = useCallback(async () => {
+    setBusy(true); setMsg(null); setOk(false);
+    try {
+      await streamPairClient(
+        pin,
+        name || undefined,
+        credsKnown ? undefined : user,
+        credsKnown ? undefined : pass,
+      );
+      setOk(true);
+      setMsg("Paired. Friend can click your PC in Moonlight and start a stream.");
+      setPin("");
+    } catch (e) {
+      setMsg(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }, [pin, name, user, pass, credsKnown]);
+
+  return (
+    <div className="mt-4 rounded-md border border-abyss-border bg-abyss-panel-2/40 p-3">
+      <div className="flex items-center gap-2">
+        <p className="text-xs font-medium text-abyss-fg">Pair a Moonlight client</p>
+        {credsKnown === true && (
+          <span className="inline-flex items-center gap-1 rounded-full border border-abyss-success/40 bg-abyss-success/10 px-2 py-0.5 text-[10px] font-mono uppercase tracking-widest text-abyss-success">
+            creds ✓
+          </span>
+        )}
+      </div>
+      <p className="mt-0.5 text-[11px] leading-relaxed text-abyss-fg-muted">
+        For an external Moonlight pairing: friend adds this PC, Moonlight shows a 4-digit PIN, paste
+        it here. (Friends inside Abyss can skip this — the Friends → <em>stream</em> button auto-pairs.)
+      </p>
+      {!hostRunning && (
+        <p className="mt-1 text-[11px] text-abyss-warning">
+          Start the Sunshine host first — pairing only works while it's running.
+        </p>
+      )}
+      {credsKnown === false && (
+        <div className="mt-2 grid grid-cols-2 gap-2">
+          <input
+            type="text"
+            value={user}
+            onChange={(e) => setUser(e.target.value)}
+            placeholder="Sunshine admin user"
+            className={inputCls}
+          />
+          <input
+            type="password"
+            value={pass}
+            onChange={(e) => setPass(e.target.value)}
+            placeholder="Sunshine admin password"
+            className={inputCls}
+          />
+          <p className="col-span-2 text-[10px] text-abyss-fg-dim">
+            One-time. Tip: click <em>Set Sunshine creds</em> in the buttons above to skip this entirely.
+          </p>
+        </div>
+      )}
+      <div className="mt-2 grid grid-cols-[6rem_1fr_auto] items-center gap-2">
+        <input
+          type="text"
+          inputMode="numeric"
+          maxLength={4}
+          value={pin}
+          onChange={(e) => setPin(e.target.value.replace(/\D/g, "").slice(0, 4))}
+          placeholder="PIN"
+          className={`${inputCls} text-center font-mono text-base tracking-[0.4em]`}
+        />
+        <input
+          type="text"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="Friend name (optional)"
+          className={inputCls}
+        />
+        <button
+          type="button"
+          disabled={!canSubmit}
+          onClick={submit}
+          className="h-9 min-w-[6rem] shrink-0 rounded-md border border-abyss-accent/60 bg-abyss-accent/10 px-4 text-sm font-semibold text-abyss-accent hover:bg-abyss-accent/20 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {busy ? "Pairing…" : "Pair"}
+        </button>
+      </div>
+      {!canSubmit && blockedReason && !msg && (
+        <p className="mt-1 text-[10px] text-abyss-fg-dim">
+          {blockedReason}
+        </p>
+      )}
+      {msg && (
+        <p className={`mt-2 text-[11px] ${ok ? "text-abyss-success" : "text-abyss-danger"}`}>
+          {msg}
+        </p>
+      )}
+    </div>
+  );
+}

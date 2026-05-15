@@ -9,6 +9,7 @@ export type NavId =
   | "network"
   | "stream"
   | "friends"
+  | "discover"
   | "settings";
 
 export interface NavItem {
@@ -20,9 +21,10 @@ export interface NavItem {
 }
 
 export const NAV_ITEMS: readonly NavItem[] = [
-  { id: "library",  label: "Library",  hotkey: "1", phase: 2 },
-  { id: "network",  label: "Network",  hotkey: "2", phase: 4 },
-  { id: "stream",   label: "Stream",   hotkey: "3", phase: 5 },
-  { id: "friends",  label: "Friends",  hotkey: "4", phase: 6 },
-  { id: "settings", label: "Settings", hotkey: "5", phase: 1 },
+  { id: "library",  label: "Library",  hotkey: "1", phase: 2  },
+  { id: "network",  label: "Network",  hotkey: "2", phase: 4  },
+  { id: "stream",   label: "Stream",   hotkey: "3", phase: 5  },
+  { id: "friends",  label: "Friends",  hotkey: "4", phase: 6  },
+  { id: "discover", label: "Discover", hotkey: "5", phase: 14 },
+  { id: "settings", label: "Settings", hotkey: "6", phase: 1  },
 ] as const;

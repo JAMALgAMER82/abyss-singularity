@@ -49,6 +49,61 @@ pub enum ChatProtocol {
         resume_offset: Option<u64>,
         sent_at_ms:  i64,
     },
+
+    // ---------------- Phase 12 — in-app GameRanger-style lobby ----------------
+    /// Host broadcasts: "I'm hosting a game right now." Sent to every
+    /// connected chat peer when a room is created and on each membership
+    /// change. Receivers surface it in the Friends/Lobby panel.
+    LobbyAdvertise {
+        host_name:  String,
+        platform:   String,
+        game_name:  String,
+        members:    Vec<String>,
+        sent_at_ms: i64,
+    },
+    /// Member asks the host to join the current room.
+    LobbyJoinRequest {
+        display_name: String,
+        sent_at_ms:   i64,
+    },
+    /// Host accepted the join. Carries the canonical game identifier so the
+    /// joiner can confirm they have a local copy before the host hits Start.
+    LobbyJoinAccepted {
+        platform:   String,
+        game_name:  String,
+        sent_at_ms: i64,
+    },
+    /// Member voluntarily leaves the room (or host kicks them).
+    LobbyLeave { sent_at_ms: i64 },
+    /// Host shuts the room down. Receivers clear any in-room state.
+    LobbyClose { sent_at_ms: i64 },
+    /// Host hit "Start game" — all members launch their copy of the game
+    /// configured as netplay-client pointing at `host_addr`. Sent once,
+    /// fan-out is N copies (one per member). Members reply via their local
+    /// launch; success/failure is observed via orchestration events.
+    LobbyStartGame {
+        platform:    String,
+        game_name:   String,
+        host_addr:   String,
+        sent_at_ms:  i64,
+    },
+
+    // ---------------- Phase 13 — silent Sunshine/Moonlight pairing -----------
+    /// Friend → host: "I'm about to start a Moonlight pair with the PIN
+    /// below. Accept it on your Sunshine for me." Eliminates the
+    /// "Moonlight shows a PIN, host pastes it into Abyss" out-of-band
+    /// step — both sides agree on the PIN via this trusted channel.
+    StreamPairOffer {
+        pin:        String,
+        sent_at_ms: i64,
+    },
+    /// Host → friend: result of the auto-accept. `ok=true` means Sunshine
+    /// accepted; `ok=false` carries an actionable error string.
+    StreamPairResult {
+        ok:         bool,
+        error:      Option<String>,
+        sent_at_ms: i64,
+    },
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]

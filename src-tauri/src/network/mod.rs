@@ -8,6 +8,8 @@
 //!    that's fair to both players in a cross-continental co-op session.
 
 pub mod commands;
+pub mod config;
+pub mod invite;
 pub mod latency;
 pub mod regions;
 pub mod tailscale;

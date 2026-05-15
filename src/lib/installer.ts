@@ -40,11 +40,32 @@ export type InstallProgress =
 
 export const INSTALL_PROGRESS_EVENT = "abyss://installer/progress";
 
-export const installerAvailable    = () => invoke<EmulatorManifest[]>("installer_available");
-export const installerStatus       = () => invoke<EmulatorInstallState[]>("installer_status");
-export const installerInstall      = (id: string) => invoke<InstallReport>("installer_install", { id });
-export const installerUninstall    = (id: string) => invoke<void>("installer_uninstall", { id });
-export const installerAutoAssign   = () => invoke<[Platform, string][]>("installer_auto_assign");
+export interface InstallAllReport {
+  installed:      string[];
+  alreadyPresent: string[];
+  failed:         [string, string][];
+}
+
+export const installerAvailable             = () => invoke<EmulatorManifest[]>("installer_available");
+export const installerStatus                = () => invoke<EmulatorInstallState[]>("installer_status");
+export const installerInstall               = (id: string) => invoke<InstallReport>("installer_install", { id });
+export const installerInstallAll            = () => invoke<InstallAllReport>("installer_install_all");
+export const installerUninstall             = (id: string) => invoke<void>("installer_uninstall", { id });
+export const installerAutoAssign            = () => invoke<[Platform, string][]>("installer_auto_assign");
+export const installerConfigureControllers  = () => invoke<string[]>("installer_configure_controllers");
+export const installerRepair                = () => invoke<number>("installer_repair");
+
+export interface StreamingInstallReport {
+  sunshineInstalled:  boolean;
+  sunshinePath?:      string;
+  moonlightInstalled: boolean;
+  moonlightPath?:     string;
+  tailscaleInstalled: boolean;
+  tailscalePath?:     string;
+  messages:           string[];
+}
+export const installerInstallStreamingApps  = () =>
+  invoke<StreamingInstallReport>("installer_install_streaming_apps");
 
 export function onInstallProgress(handler: (p: InstallProgress) => void): Promise<UnlistenFn> {
   return listen<InstallProgress>(INSTALL_PROGRESS_EVENT, (event) => handler(event.payload));

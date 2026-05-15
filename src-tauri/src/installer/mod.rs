@@ -6,10 +6,13 @@
 //! assign-to-platform. Progress events flow through
 //! [`types::INSTALL_PROGRESS_EVENT`].
 
+pub mod bios_finder;
 pub mod commands;
+pub mod controller_setup;
 pub mod download;
 pub mod extract;
 pub mod manifests;
+pub mod streaming_apps;
 pub mod types;
 
 #[cfg(test)]

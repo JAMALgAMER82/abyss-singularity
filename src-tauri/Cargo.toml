@@ -1,9 +1,9 @@
 [package]
-name = "abyss-singularity"
-version = "0.1.0"
-description = "A Tauri App"
-authors = ["you"]
-edition = "2021"
+name        = "abyss-singularity"
+version     = "0.1.0"
+description = "Cross-continental co-op gaming hub. By MasterMind George."
+authors     = ["MasterMind George"]
+edition     = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -31,6 +31,7 @@ anyhow = "^1"
 thiserror = "^2"
 sha2 = "^0.10"
 hex = "^0.4"
+base64 = "^0.22"
 walkdir = "^2.5"
 reqwest = { version = "^0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 chrono = { version = "^0.4", features = ["serde"] }
@@ -40,7 +41,7 @@ tauri-plugin-shell = "^2"
 zip = "^4"
 sevenz-rust2 = "^0.18"
 futures = "^0.3"
-windows = { version = "^0.62", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi"] }
+windows = { version = "^0.62", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_Graphics_Gdi"] }
 tauri-plugin-single-instance = "^2"
 tauri-plugin-updater = "^2"
 image = { version = "^0.25", default-features = false, features = ["png"] }

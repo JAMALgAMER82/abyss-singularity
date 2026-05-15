@@ -66,13 +66,15 @@ fn builtin_recipes_cover_every_platform_at_least_once() {
         .flat_map(|r| r.platforms.iter().copied())
         .collect();
     // These are the platforms we MUST be able to launch something for.
-    // (Some others — e.g. PS Vita, Wii U — have only one emulator we trust
-    // so they're allowed to remain optional in the recipe set, but the
-    // core ones below should always have at least one option.)
+    // Switch and 3DS are intentionally absent: Ryujinx (Switch) and Citra
+    // (3DS) were shut down in late 2024 and we don't ship the legally-
+    // murky forks. PS Vita is similarly user-configured. Other platforms
+    // below should always have at least one option baked in.
     for required in [
         Platform::Pc, Platform::Snes, Platform::N64, Platform::GameCube,
-        Platform::Wii, Platform::Switch, Platform::Ps1, Platform::Ps2,
+        Platform::Wii, Platform::Ps1, Platform::Ps2,
         Platform::Ps3, Platform::GameboyAdvance, Platform::Nds,
+        Platform::Dreamcast,
     ] {
         assert!(
             covered.contains(&required),

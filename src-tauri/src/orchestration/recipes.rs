@@ -17,12 +17,51 @@ use crate::library::types::Platform;
 /// Whitelist of emulator ids whose top-level window reparents cleanly
 /// into the Abyss main HWND via Win32 SetParent. Used by the orchestration
 /// launch path on Windows to opt-in to the [`super::embed`] flow.
-pub fn is_embeddable(emulator_id: &str) -> bool {
-    matches!(
-        emulator_id,
-        "retroarch" | "mgba" | "ppsspp" | "desmume" | "duckstation" | "citra"
-            | "mednafen" | "flycast" | "pc-direct" | "snes9x" | "project64" | "stella"
-    )
+/// Map a library platform to the libretro core DLL filename that should
+/// launch it via RetroArch. `None` means "no specific core, let RetroArch
+/// show its menu" — useful for platforms RetroArch doesn't ship a core
+/// for in the stable bundle. Filenames match the layout in
+/// `RetroArch-Win64/cores/`.
+pub fn retroarch_core_for(platform: crate::library::types::Platform) -> Option<&'static str> {
+    use crate::library::types::Platform::*;
+    Some(match platform {
+        Nes             => "nestopia_libretro.dll",
+        Snes            => "snes9x_libretro.dll",
+        N64             => "mupen64plus_next_libretro.dll",
+        Gameboy
+            | GameboyColor => "gambatte_libretro.dll",
+        GameboyAdvance  => "mgba_libretro.dll",
+        Nds             => "desmume_libretro.dll",
+        // Genesis Plus GX is the single best Sega core — covers Mega
+        // Drive / Genesis, Master System, Game Gear, and SG-1000 from
+        // one .dll, with the strongest accuracy + bios-free profile.
+        Genesis
+            | MasterSystem
+            | GameGear      => "genesis_plus_gx_libretro.dll",
+        Ps1             => "swanstation_libretro.dll",
+        Psp             => "ppsspp_libretro.dll",
+        Atari2600       => "stella_libretro.dll",
+        NeoGeo
+            | Arcade        => "fbneo_libretro.dll",
+        Saturn          => "mednafen_saturn_libretro.dll",
+        Dreamcast       => "flycast_libretro.dll",
+        // The rest fall through to "let RetroArch pick" — these
+        // platforms have dedicated standalones that own them in
+        // Abyss's default assignments.
+        _ => return None,
+    })
+}
+
+pub fn is_embeddable(_emulator_id: &str) -> bool {
+    // Win32 SetParent breaks rendering for every GPU-accelerated
+    // emulator we ship: DXGI/D3D11 swap chains and Vulkan/OpenGL
+    // contexts bind to the original top-level HWND at creation, so
+    // reparenting orphans the present target — game audio plays but
+    // the framebuffer never reaches the embedded surface (black
+    // window). The orchestration::commands launch path falls back to
+    // "minimise Abyss, run emulator as its own window, restore on
+    // exit" instead, which works for everything we wrap.
+    false
 }
 
 /// Returns the canonical built-in recipe list. The user can copy any of
@@ -64,19 +103,23 @@ pub fn builtin_recipes() -> Vec<EmulatorEntry> {
         r("cemu", "Cemu (Wii U)",
             &["-f", "-g", "{game_path}"],
             &[Platform::WiiU]),
-        r("ryujinx", "Ryujinx (Switch)",
-            &["--fullscreen", "{game_path}"],
-            &[Platform::Switch]),
+        // Ryujinx removed: project taken down October 2024; legal status
+        // unstable enough we don't want to ship an install path.
 
+        // PCSX2 Qt v2.x uses single-dash flags; `-batch` skips the GUI
+        // prompt and `--` separates options from the positional ROM path.
         r("pcsx2", "PCSX2 (PS2)",
-            &["--fullscreen", "--", "{game_path}"],
+            &["-batch", "-fullscreen", "--", "{game_path}"],
             &[Platform::Ps2]),
+        // RPCS3 boots a disc/iso via --no-gui; --fullscreen would be
+        // nice but the build complains, so leave it off — it remembers
+        // last-used window size and fullscreen toggle (Ctrl+F11) anyway.
         r("rpcs3", "RPCS3 (PS3)",
             &["--no-gui", "{game_path}"],
             &[Platform::Ps3]),
-        r("duckstation", "DuckStation (PS1)",
-            &["-fullscreen", "{game_path}"],
-            &[Platform::Ps1]),
+        // DuckStation is the "pcsx-redux" id below (the original PCSX-Redux
+        // releases dried up so we repurposed its slot). No separate
+        // "duckstation" recipe to avoid a duplicate Settings tile.
         r("ppsspp", "PPSSPP (PSP)",
             &["--fullscreen", "{game_path}"],
             &[Platform::Psp]),
@@ -87,26 +130,37 @@ pub fn builtin_recipes() -> Vec<EmulatorEntry> {
         r("desmume", "DeSmuME (DS)",
             &["--fullscreen", "{game_path}"],
             &[Platform::Nds]),
-        r("citra", "Citra (3DS)",
-            &["{game_path}"],
-            &[Platform::Threeds]),
+        // Citra removed: project shut down November 2024. Active forks
+        // (Lime3DS, Azahar) are legally untested — leaving 3DS to user
+        // configuration for now.
 
-        r("flycast", "Flycast (Dreamcast/Saturn)",
+        r("flycast", "Flycast (Dreamcast)",
             &["-config", "window:fullscreen=yes", "{game_path}"],
-            &[Platform::Dreamcast, Platform::Saturn]),
-        r("mednafen", "Mednafen (multi-system)",
-            &["-fs", "1", "{game_path}"],
-            &[Platform::Genesis, Platform::MasterSystem, Platform::Atari2600, Platform::PsVita]),
+            &[Platform::Dreamcast]),
+        // Mednafen removed: every system it covers is already handled by
+        // RetroArch with stronger controller defaults and a smaller setup
+        // surface. One fewer redundant tile.
 
         // Standalone alternatives for users who want a non-libretro path.
+        // Snes9x 1.62.3's CLI is finicky — `-fullscreen` triggers an
+        // access violation on launch (verified 2026-05-14). Bare-ROM
+        // works fine; the user can press Alt+Enter in-game to toggle
+        // fullscreen.
         r("snes9x", "Snes9x (SNES)",
-            &["-fullscreen", "{game_path}"],
+            &["{game_path}"],
             &[Platform::Snes]),
-        r("project64", "Project64 (N64)",
+        // The "project64" id is now backed by Simple64 (Project64's repo
+        // dropped all releases). Simple64's CLI takes the ROM path
+        // positionally; the original args still work.
+        r("project64", "Simple64 (N64)",
             &["{game_path}"],
             &[Platform::N64]),
-        r("pcsx-redux", "PCSX-Redux (PS1)",
-            &["-iso", "{game_path}", "-run"],
+        // The "pcsx-redux" id is now backed by DuckStation. `-fastboot`
+        // tells DuckStation to skip the PS1 BIOS entirely (uses HLE);
+        // works for ~95% of commercial titles without the user having to
+        // dump their own scph1001.bin. `-fullscreen <rom>` then auto-boots.
+        r("pcsx-redux", "DuckStation (PS1)",
+            &["-fastboot", "-fullscreen", "{game_path}"],
             &[Platform::Ps1]),
         r("stella", "Stella (Atari 2600)",
             &["{game_path}"],

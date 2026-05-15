@@ -27,6 +27,14 @@ import {
   transferReject,
   type PendingOffer,
 } from "../lib/transfer";
+import { InvitesSection } from "../components/InvitesSection";
+import { LobbySection }   from "../components/LobbySection";
+import { PartyHero }      from "../components/PartyHero";
+import {
+  onStreamPairProgress,
+  streamRequestPairAndLaunch,
+  type StreamPairProgress,
+} from "../lib/streaming";
 
 /**
  * Phase 6.x — Friends + chat + presence.
@@ -47,6 +55,8 @@ export function FriendsView() {
   const [error,      setError]      = useState<string | null>(null);
   const [incoming,   setIncoming]   = useState<PendingOffer[]>([]);
   const [transferProgress, setTransferProgress] = useState<Record<string, { bytes: number; total: number }>>({});
+  const [streamPair, setStreamPair] = useState<StreamPairProgress | null>(null);
+  const [streamPairBusy, setStreamPairBusy] = useState<string | null>(null);
 
   // ---- initial load ------------------------------------------------------
   useEffect(() => {
@@ -67,10 +77,15 @@ export function FriendsView() {
     let unlistenMsg:  undefined | (() => void);
     let unlistenPeer: undefined | (() => void);
     let unlistenXfer: undefined | (() => void);
+    let unlistenPair: undefined | (() => void);
     onChatMessage((entry) => {
       setHistory((prev) => [...prev, entry]);
     }).then((u) => { unlistenMsg = u; });
     onChatPeers((peers) => setChatPeers(peers)).then((u) => { unlistenPeer = u; });
+    onStreamPairProgress((p) => {
+      setStreamPair(p);
+      setStreamPairBusy(null);
+    }).then((u) => { unlistenPair = u; });
     transferListIncoming().then(setIncoming).catch(() => {});
     onTransferEvent((e) => {
       if (e.kind === "offered" && e.offer.direction === "incoming") {
@@ -86,7 +101,18 @@ export function FriendsView() {
         });
       }
     }).then((u) => { unlistenXfer = u; });
-    return () => { unlistenMsg?.(); unlistenPeer?.(); unlistenXfer?.(); };
+    return () => { unlistenMsg?.(); unlistenPeer?.(); unlistenXfer?.(); unlistenPair?.(); };
+  }, []);
+
+  const startStreamFromPeer = useCallback(async (addr: string) => {
+    setError(null);
+    setStreamPair(null);
+    setStreamPairBusy(addr);
+    try { await streamRequestPairAndLaunch(addr); }
+    catch (e) {
+      setError(String(e));
+      setStreamPairBusy(null);
+    }
   }, []);
 
   const acceptOffer = useCallback(async (tid: string) => {
@@ -264,6 +290,45 @@ export function FriendsView() {
         </div>
       )}
 
+      {/* Phase 12 — invite codes + in-app netplay lobby. Stacked at the top
+          so they're visible before the user scrolls into the per-peer chat. */}
+      <div className="space-y-4 border-b border-abyss-border bg-abyss-panel-2/20 px-6 py-5">
+        <PartyHero
+          onInviteFriend={() => {
+            // Scroll the InvitesSection into view + expand it.
+            const el = document.getElementById("invites-section");
+            if (el) {
+              el.scrollIntoView({ behavior: "smooth", block: "start" });
+              const details = el.querySelector("details");
+              if (details && !details.open) (details as HTMLDetailsElement).open = true;
+            }
+          }}
+          onHostGame={() => {
+            const el = document.getElementById("lobby-section");
+            el?.scrollIntoView({ behavior: "smooth", block: "start" });
+          }}
+        />
+        <div id="invites-section"><InvitesSection /></div>
+        <div id="lobby-section"><LobbySection /></div>
+      </div>
+
+      {streamPair && (
+        <div className={`flex items-center justify-between gap-3 border-b px-6 py-2 text-xs ${
+          streamPair.phase === "accepted"
+            ? "border-abyss-success/30 bg-abyss-success/10 text-abyss-success"
+            : streamPair.phase === "timeout"
+              ? "border-abyss-warning/30 bg-abyss-warning/10 text-abyss-warning"
+              : "border-abyss-danger/30 bg-abyss-danger/10 text-abyss-danger"
+        }`}>
+          <span>
+            {streamPair.phase === "accepted" && <>✓ Paired with {streamPair.host_addr}, Moonlight is launching…</>}
+            {streamPair.phase === "timeout"  && <>⏱ {streamPair.host_addr} didn't accept the pair within 30s. Are they running Abyss?</>}
+            {streamPair.phase === "rejected" && <>✗ {streamPair.host_addr} rejected the pair: {streamPair.error}</>}
+          </span>
+          <button type="button" onClick={() => setStreamPair(null)} className="text-[11px] underline-offset-2 hover:underline">dismiss</button>
+        </div>
+      )}
+
       <div className="grid flex-1 grid-cols-1 gap-0 overflow-hidden md:grid-cols-[300px_1fr]">
         {/* ============================== PEER LIST =========================== */}
         <aside className="overflow-auto border-r border-abyss-border bg-abyss-panel/40">
@@ -289,6 +354,8 @@ export function FriendsView() {
                   selected={p.addr === selected}
                   onSelect={() => setSelected(p.addr)}
                   onConnect={() => connectPeer(p.addr)}
+                  onStream={() => startStreamFromPeer(p.addr)}
+                  streamBusy={streamPairBusy === p.addr}
                 />
               ))}
             </ul>
@@ -358,11 +425,15 @@ function PeerRow({
   selected,
   onSelect,
   onConnect,
+  onStream,
+  streamBusy,
 }: {
-  peer:      MergedPeer;
-  selected:  boolean;
-  onSelect:  () => void;
-  onConnect: () => void;
+  peer:       MergedPeer;
+  selected:   boolean;
+  onSelect:   () => void;
+  onConnect:  () => void;
+  onStream:   () => void;
+  streamBusy: boolean;
 }) {
   const display = peer.chat?.display_name ?? peer.meshName ?? peer.addr;
   const dot =
@@ -371,6 +442,7 @@ function PeerRow({
       : peer.meshOnline
         ? "bg-abyss-accent/50"
         : "bg-abyss-fg-dim";
+  const canStream = Boolean(peer.chat?.connected); // need live chat for the pair offer
 
   return (
     <li>
@@ -401,6 +473,17 @@ function PeerRow({
             className="h-6 rounded-sm border border-abyss-accent/40 bg-abyss-accent/10 px-2 text-[10px] font-medium text-abyss-accent hover:bg-abyss-accent/20"
           >
             link
+          </button>
+        )}
+        {canStream && (
+          <button
+            type="button"
+            disabled={streamBusy}
+            onClick={(e) => { e.stopPropagation(); onStream(); }}
+            title="Pair Moonlight + Sunshine automatically and start streaming from this peer's PC"
+            className="h-6 rounded-sm border border-abyss-success/40 bg-abyss-success/10 px-2 text-[10px] font-medium text-abyss-success hover:bg-abyss-success/20 disabled:cursor-wait disabled:opacity-50"
+          >
+            {streamBusy ? "pairing…" : "stream"}
           </button>
         )}
       </button>

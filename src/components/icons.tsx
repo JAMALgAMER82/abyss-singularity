@@ -48,6 +48,12 @@ export const FriendsIcon  = (p: IconProps) => (
     <path d="M15 19c0-2 1.5-3.5 4-3.5s2 0 2 0" />
   </svg>
 );
+export const DiscoverIcon = (p: IconProps) => (
+  <svg {...baseProps(p)}>
+    <circle cx="12" cy="12" r="9" />
+    <path d="M9 12l4 -4 -2 6 -4 4 2 -6z" fill="currentColor" stroke="none" />
+  </svg>
+);
 export const SettingsIcon = (p: IconProps) => (
   <svg {...baseProps(p)}>
     <circle cx="12" cy="12" r="3" />
@@ -70,5 +76,6 @@ export const NAV_ICONS: Record<NavId, (p: IconProps) => ReactElement> = {
   network:  NetworkIcon,
   stream:   StreamIcon,
   friends:  FriendsIcon,
+  discover: DiscoverIcon,
   settings: SettingsIcon,
 };

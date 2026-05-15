@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   enrichLibraryMetadata,
   loadLibrary,
@@ -26,6 +26,10 @@ import {
   transferSend,
   type TransferEvent,
 } from "../lib/transfer";
+import {
+  installerInstallAll,
+  installerRepair,
+} from "../lib/installer";
 
 type ScanState =
   | { kind: "idle" }
@@ -104,18 +108,68 @@ export function LibraryView() {
     [entries]
   );
 
+  // Per-run telemetry: launch time + ring-buffered stderr, so we can
+  // surface a useful banner when an emulator crashes within seconds of
+  // spawn — the "click play, Abyss flickers minimised, nothing happens"
+  // failure mode (missing BIOS, missing core, AV block, etc.).
+  const runsRef = useRef<Map<string, {
+    startedAt:  number;
+    stderr:     string[];
+    emulatorId: string;
+    entryId:    string;
+  }>>(new Map());
+  const STDERR_CAP = 8;
+  // Any launch that ends within 6s is suspicious enough to surface the
+  // diagnostic banner — a real gameplay session never quits that fast.
+  // We deliberately ignore the exit code: PCSX2 v2's `-batch` mode can
+  // hit a fatal init error (missing BIOS, bad ROM path, GPU init fail)
+  // and exit *clean* (code 0) without ever showing UI, which a
+  // "non-zero only" detector would miss completely.
+  const SHORT_LIFE_MS = 6000;
+
+  const [crashReport, setCrashReport] = useState<{
+    entryName:  string;
+    emulatorId: string;
+    lived:      number;
+    exitCode:   number | null;
+    stderrTail: string;
+  } | null>(null);
+
   // Track currently-running emulator processes so we can show a badge +
-  // a "Stop" button on the card of any game currently being played.
+  // a "Stop" button on the card of any game currently being played, and
+  // detect short-lived crashes via the runsRef telemetry above.
   useEffect(() => {
     orchListRunning().then(setRunning).catch(() => { /* fine if none */ });
     let unlisten: undefined | (() => void);
     onLaunchEvent((e) => {
-      if (e.kind === "exited") {
-        setRunning((prev) => prev.filter((r) => r.run_id !== e.run_id));
+      if (e.kind === "stderr") {
+        const r = runsRef.current.get(e.run_id);
+        if (r) {
+          r.stderr.push(e.line);
+          if (r.stderr.length > STDERR_CAP) r.stderr.splice(0, r.stderr.length - STDERR_CAP);
+        }
+      } else if (e.kind === "exited") {
+        const r = runsRef.current.get(e.run_id);
+        runsRef.current.delete(e.run_id);
+        setRunning((prev) => prev.filter((rp) => rp.run_id !== e.run_id));
+        if (r) {
+          const lived = Date.now() - r.startedAt;
+          if (lived < SHORT_LIFE_MS) {
+            const entry = entries.find((x) => x.id === r.entryId);
+            const tail = r.stderr.length > 0 ? r.stderr.join("\n") : "(no stderr captured)";
+            setCrashReport({
+              entryName:  entry?.stem ?? "this game",
+              emulatorId: r.emulatorId,
+              lived,
+              exitCode:   e.code,
+              stderrTail: tail,
+            });
+          }
+        }
       }
     }).then((u) => { unlisten = u; });
     return () => unlisten?.();
-  }, []);
+  }, [entries]);
 
   const runningByEntry = useMemo(() => {
     const m = new Map<string, RunningProcess>();
@@ -125,8 +179,24 @@ export function LibraryView() {
 
   const play = useCallback(async (entry: LibraryEntry) => {
     setLaunchError(null);
+    setCrashReport(null);
     try {
       const handle = await orchLaunch(entry.id);
+      // Register telemetry for the crash detector. We hold the exact
+      // command line we asked the OS to run so the crash banner can
+      // surface it — useful when the user knows the emulator works if
+      // launched manually and wants to compare what Abyss is doing.
+      runsRef.current.set(handle.run_id, {
+        startedAt:   Date.now(),
+        stderr:      [],
+        emulatorId:  handle.emulator_id,
+        entryId:     handle.entry_id,
+      });
+      setLastCommand({
+        runId:       handle.run_id,
+        commandLine: handle.command_line,
+        entryName:   entry.stem,
+      });
       setRunning((prev) => [...prev, {
         run_id: handle.run_id,
         pid: handle.pid,
@@ -138,6 +208,14 @@ export function LibraryView() {
       setLaunchError(String(err));
     }
   }, []);
+
+  // Memory of the most recent launch attempt — only used by the crash
+  // banner so it can show "Abyss ran: <exact command>".
+  const [lastCommand, setLastCommand] = useState<{
+    runId:       string;
+    commandLine: string;
+    entryName:   string;
+  } | null>(null);
 
   const stop = useCallback(async (runId: string) => {
     try { await orchTerminate(runId); } catch { /* nothing to do */ }
@@ -256,9 +334,17 @@ export function LibraryView() {
       <ScanStatusBar state={scan} />
       <EnrichStatusBar state={enrich} />
       {launchError && (
-        <div className="border-b border-abyss-border bg-abyss-danger/10 px-6 py-2 text-xs text-abyss-danger">
-          Launch failed: {launchError}
-        </div>
+        <LaunchErrorPrompt
+          error={launchError}
+          onDismiss={() => setLaunchError(null)}
+        />
+      )}
+      {crashReport && (
+        <CrashReportPrompt
+          report={crashReport}
+          lastCommand={lastCommand}
+          onDismiss={() => setCrashReport(null)}
+        />
       )}
 
       {pickerForEntry && (
@@ -583,4 +669,320 @@ function fmt(n: number): string {
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
   if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
   return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
+/**
+ * Big, friendly, actionable launch-failure banner.
+ *
+ * The previous version was a one-line strip at the top — easy to miss
+ * once you'd scrolled into the library grid. Most real launch failures
+ * fall into a few patterns:
+ *   * "no emulator assigned to platform X"           → emulator never installed
+ *   * "emulator X is missing from config"            → config drift
+ *   * "emulator X has no exe path set"               → install partially completed
+ *   * "extracted archive but expected exe missing"   → install corrupted
+ *
+ * Each pattern gets a tailored explanation + a single-click fix action
+ * (either `installerInstallAll` or `installerRepair`). Anything we
+ * don't recognise falls back to a raw error message plus a "Run Repair"
+ * button — `installer_repair` is idempotent so it's safe as a generic
+ * "try fixing yourself" gesture.
+ */
+function LaunchErrorPrompt({ error, onDismiss }: { error: string; onDismiss: () => void }) {
+  const [busy,     setBusy]     = useState(false);
+  const [progress, setProgress] = useState<string | null>(null);
+  const [done,     setDone]     = useState<string | null>(null);
+  const [showRaw,  setShowRaw]  = useState(false);
+
+  // Pattern-match the error string to figure out which fix to suggest.
+  // Order matters — more-specific patterns first.
+  const diagnosis: {
+    title:       string;
+    explanation: string;
+    actionLabel: string;
+    action:      "install_all" | "repair" | null;
+  } =
+    /no emulator assigned to platform/i.test(error)
+      ? {
+          title:       "No emulator installed for this game",
+          explanation: "You haven't installed the emulator that runs this platform yet. " +
+                       "Abyss can install every supported emulator in one go (~600 MB, 5–10 min on a normal connection).",
+          actionLabel: "Install all emulators",
+          action:      "install_all",
+        }
+      : /is missing from config/i.test(error)
+      ? {
+          title:       "Emulator missing",
+          explanation: "Abyss has a record of an emulator that isn't actually installed. Run Repair to re-scan " +
+                       "the install folder and patch the config.",
+          actionLabel: "Run Repair",
+          action:      "repair",
+        }
+      : /has no exe path set|expected exe missing|extracted archive but/i.test(error)
+      ? {
+          title:       "Emulator install didn't finish",
+          explanation: "The emulator extracted but Abyss couldn't find its exe. Run Repair to re-scan " +
+                       "the install folder — most often this fixes archives that nested into a versioned subdir.",
+          actionLabel: "Run Repair",
+          action:      "repair",
+        }
+      : /library entry not found/i.test(error)
+      ? {
+          title:       "Game not in your library",
+          explanation: "Abyss couldn't find this game's library entry. Re-scan your games folder under the " +
+                       "Library tab and try again.",
+          actionLabel: "",
+          action:      null,
+        }
+      : {
+          title:       "Couldn't launch this game",
+          explanation: "Something went wrong starting the emulator. Running Repair is safe and often clears " +
+                       "the issue — it re-scans installed emulators and patches their config in place.",
+          actionLabel: "Run Repair",
+          action:      "repair",
+        };
+
+  const runFix = useCallback(async () => {
+    if (diagnosis.action === null) return;
+    setBusy(true);
+    setProgress(diagnosis.action === "install_all"
+      ? "Installing emulators (this can take 5–10 minutes)…"
+      : "Running Repair…");
+    setDone(null);
+    try {
+      if (diagnosis.action === "install_all") {
+        const r = await installerInstallAll();
+        setDone(
+          r.installed.length > 0
+            ? `Installed ${r.installed.length} emulator${r.installed.length === 1 ? "" : "s"}. ` +
+              `Click Play again — it should work now.`
+            : r.alreadyPresent.length > 0
+              ? `All emulators were already installed. The issue is something else — see the technical details below.`
+              : `Nothing installed. Check your internet connection.`
+        );
+      } else {
+        const repaired = await installerRepair();
+        setDone(repaired > 0
+          ? `Repaired ${repaired} emulator config entr${repaired === 1 ? "y" : "ies"}. Click Play again.`
+          : `Nothing to repair — the issue is elsewhere. See the technical details below.`);
+      }
+    } catch (e) {
+      setDone(`Fix failed: ${String(e)}`);
+    } finally {
+      setBusy(false);
+      setProgress(null);
+    }
+  }, [diagnosis.action]);
+
+  return (
+    <div className="border-y border-abyss-danger/40 bg-abyss-danger/10 px-6 py-4">
+      <div className="flex items-start gap-3">
+        <span className="mt-0.5 text-2xl text-abyss-danger">⚠</span>
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-semibold text-abyss-danger">{diagnosis.title}</p>
+          <p className="mt-1 text-xs text-abyss-fg-muted">{diagnosis.explanation}</p>
+
+          {progress && (
+            <p className="mt-2 text-xs text-abyss-accent">
+              <span className="inline-block animate-pulse">●</span> {progress}
+            </p>
+          )}
+          {done && (
+            <p className="mt-2 rounded-sm border border-abyss-success/30 bg-abyss-success/10 px-3 py-1.5 text-xs text-abyss-success">
+              {done}
+            </p>
+          )}
+
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            {diagnosis.action && (
+              <button
+                type="button"
+                disabled={busy}
+                onClick={runFix}
+                className="h-8 rounded-md border border-abyss-accent/60 bg-abyss-accent/10 px-4 text-xs font-semibold text-abyss-accent transition-colors hover:bg-abyss-accent/20 disabled:cursor-wait disabled:opacity-50"
+              >
+                {busy ? "Working…" : diagnosis.actionLabel}
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => setShowRaw((v) => !v)}
+              className="text-[11px] text-abyss-fg-muted underline-offset-2 hover:underline"
+            >
+              {showRaw ? "Hide" : "Show"} technical details
+            </button>
+            <button
+              type="button"
+              onClick={onDismiss}
+              className="ml-auto text-[11px] text-abyss-fg-dim hover:text-abyss-fg"
+            >
+              ✕ Dismiss
+            </button>
+          </div>
+
+          {showRaw && (
+            <pre className="mt-2 max-h-32 overflow-auto rounded-sm border border-abyss-border bg-abyss-panel-2/60 p-2 font-mono text-[11px] text-abyss-fg-muted">
+              {error}
+            </pre>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Crash banner — shown when an emulator exits non-zero within seconds of
+ * launch. This is the "manual launch works but Abyss launch silently
+ * fails" failure mode: process spawn succeeded (so the regular
+ * LaunchErrorPrompt path doesn't fire), but the emulator died too fast
+ * to even show its window.
+ *
+ * Surfaces:
+ *   1. The exact command line Abyss invoked — so the user can compare
+ *      against their working manual launch and spot the difference
+ *      (wrong core path, missing flag, paren-escaping, etc.).
+ *   2. The last stderr lines we captured before exit — usually contains
+ *      the actual reason (missing core .dll, BIOS not found, etc.).
+ *   3. A "Copy details" button to clip the whole thing for sharing with
+ *      the Abyss host.
+ *   4. A "Run Repair" action because most "Abyss launches differently
+ *      than manual" cases come from stale config the repair routine fixes.
+ */
+function CrashReportPrompt({
+  report,
+  lastCommand,
+  onDismiss,
+}: {
+  report: {
+    entryName:  string;
+    emulatorId: string;
+    lived:      number;
+    exitCode:   number | null;
+    stderrTail: string;
+  };
+  lastCommand: { runId: string; commandLine: string; entryName: string } | null;
+  onDismiss:   () => void;
+}) {
+  const [repairing, setRepairing] = useState(false);
+  const [repaired,  setRepaired]  = useState<string | null>(null);
+  const [copied,    setCopied]    = useState(false);
+
+  const cmd = (lastCommand && lastCommand.runId === lastCommand.runId)
+    ? lastCommand.commandLine
+    : "(command line not captured)";
+
+  const fullText = useMemo(() => {
+    return [
+      `Abyss launch crash report`,
+      `Game:      ${report.entryName}`,
+      `Emulator:  ${report.emulatorId}`,
+      `Lived for: ${report.lived} ms`,
+      `Exit code: ${report.exitCode ?? "null"}`,
+      "",
+      `Command Abyss ran:`,
+      cmd,
+      "",
+      `Last stderr lines:`,
+      report.stderrTail,
+    ].join("\n");
+  }, [report, cmd]);
+
+  const copy = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(fullText);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch { /* clipboard denied — user can drag-select the textarea */ }
+  }, [fullText]);
+
+  const repair = useCallback(async () => {
+    setRepairing(true);
+    setRepaired(null);
+    try {
+      const n = await installerRepair();
+      setRepaired(n > 0
+        ? `Repaired ${n} entr${n === 1 ? "y" : "ies"}. Click Play again.`
+        : `Nothing to repair — config looks consistent. Compare the command line above against a working manual launch and check for path / arg differences.`);
+    } catch (e) {
+      setRepaired(`Repair failed: ${String(e)}`);
+    } finally {
+      setRepairing(false);
+    }
+  }, []);
+
+  return (
+    <div className="border-y border-abyss-warning/40 bg-abyss-warning/10 px-6 py-4">
+      <div className="flex items-start gap-3">
+        <span className="mt-0.5 text-2xl text-abyss-warning">⚡</span>
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-semibold text-abyss-warning">
+            "{report.entryName}" launched but died after {report.lived} ms
+          </p>
+          <p className="mt-1 text-xs text-abyss-fg-muted">
+            The emulator process exited too fast to show its window
+            (exit code {report.exitCode ?? "null"}). If running the emulator
+            manually with the same game works, it's almost always an args /
+            path difference between the manual launch and what Abyss invoked.
+            Compare the command line below to spot it.
+          </p>
+
+          {/* The command line Abyss invoked */}
+          <details className="mt-3 rounded-md border border-abyss-border bg-abyss-panel-2/60" open>
+            <summary className="cursor-pointer px-3 py-2 text-[11px] font-medium text-abyss-fg-muted hover:text-abyss-fg">
+              Command Abyss ran
+            </summary>
+            <pre className="overflow-auto border-t border-abyss-border bg-abyss-panel/60 px-3 py-2 font-mono text-[11px] text-abyss-fg whitespace-pre-wrap break-all">
+              {cmd}
+            </pre>
+          </details>
+
+          {/* Last stderr — usually has the actual reason */}
+          <details className="mt-2 rounded-md border border-abyss-border bg-abyss-panel-2/60" open>
+            <summary className="cursor-pointer px-3 py-2 text-[11px] font-medium text-abyss-fg-muted hover:text-abyss-fg">
+              Last stderr lines (often has the real reason)
+            </summary>
+            <pre className="max-h-40 overflow-auto border-t border-abyss-border bg-abyss-panel/60 px-3 py-2 font-mono text-[11px] text-abyss-fg-muted whitespace-pre-wrap">
+              {report.stderrTail}
+            </pre>
+          </details>
+
+          {repaired && (
+            <p className={`mt-2 rounded-sm border px-3 py-1.5 text-xs ${
+              repaired.startsWith("Repaired")
+                ? "border-abyss-success/30 bg-abyss-success/10 text-abyss-success"
+                : "border-abyss-border bg-abyss-panel-2/40 text-abyss-fg-muted"
+            }`}>
+              {repaired}
+            </p>
+          )}
+
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              disabled={repairing}
+              onClick={repair}
+              className="h-8 rounded-md border border-abyss-accent/60 bg-abyss-accent/10 px-4 text-xs font-semibold text-abyss-accent hover:bg-abyss-accent/20 disabled:cursor-wait disabled:opacity-50"
+            >
+              {repairing ? "Repairing…" : "Run Repair"}
+            </button>
+            <button
+              type="button"
+              onClick={copy}
+              className="h-8 rounded-md border border-abyss-border bg-abyss-panel-2 px-3 text-xs font-medium text-abyss-fg-muted hover:border-abyss-accent/40 hover:text-abyss-accent"
+            >
+              {copied ? "✓ Copied" : "Copy details"}
+            </button>
+            <button
+              type="button"
+              onClick={onDismiss}
+              className="ml-auto text-[11px] text-abyss-fg-dim hover:text-abyss-fg"
+            >
+              ✕ Dismiss
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 }

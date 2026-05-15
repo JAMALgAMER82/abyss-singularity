@@ -71,29 +71,38 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// 1. Wait for the mesh interface to come up — this triggers the
-	//    interactive auth flow on first run.
-	if _, err := srv.Up(ctx); err != nil {
-		logger.Printf("tsnet.Up: %v (may still be waiting for auth)", err)
-	}
+	// IMPORTANT: services launch in parallel, BEFORE we wait for tsnet
+	// auth. The control HTTP API in particular must be reachable while
+	// the user is still signing in — otherwise the wizard can't surface
+	// the auth URL or detect the running sidecar.
 
-	// 2. Start the SOCKS5 outbound proxy. Pure Go, no admin needed.
-	go startSocks5(ctx, srv, fmt.Sprintf("127.0.0.1:%d", f.SocksPort), logger)
-
-	// 3. Start the chat-port forwarder (tsnet:CHAT → 127.0.0.1:CHAT
-	//    with PROXY v1 header injection).
-	go startPortForwarder(ctx, srv, f.ChatPort, "chat", logger)
-
-	// 3b. Start the file-transfer-port forwarder. Same PROXY v1 pattern;
-	//     the Rust side just listens on a different localhost port.
-	go startPortForwarder(ctx, srv, f.TransferPort, "transfer", logger)
-
-	// 4. Start the HTTP control API.
+	// 1. HTTP control API — first up so the React side can poll status
+	//    even before tsnet has finished its sign-in dance.
 	go startControlAPI(ctx, srv, fmt.Sprintf("127.0.0.1:%d", f.CtlPort), logger, cancel)
 
-	// 5. Block on parent process: if stdin closes, we shut down. Tauri's
-	//    sidecar plugin closes the child's stdin when the parent exits.
+	// 2. SOCKS5 outbound proxy.
+	go startSocks5(ctx, srv, fmt.Sprintf("127.0.0.1:%d", f.SocksPort), logger)
+
+	// 3. Chat-port forwarder (tsnet:CHAT → 127.0.0.1:CHAT, PROXY v1).
+	go startPortForwarder(ctx, srv, f.ChatPort, "chat", logger)
+
+	// 3b. File-transfer port forwarder, same PROXY v1 pattern.
+	go startPortForwarder(ctx, srv, f.TransferPort, "transfer", logger)
+
+	// 4. Stdin watchdog — exit cleanly when the parent process dies.
 	go watchStdin(cancel, logger)
+
+	// 5. *Now* wait for tsnet to come up in a goroutine. The Up() call
+	//    blocks until the user has authenticated; on first run it
+	//    prints the auth URL to stderr every few seconds, which our
+	//    parent captures and the UI surfaces via the control API.
+	go func() {
+		if _, err := srv.Up(ctx); err != nil {
+			logger.Printf("tsnet.Up: %v (may still be waiting for auth)", err)
+		} else {
+			logger.Printf("tsnet: backend ready")
+		}
+	}()
 
 	<-ctx.Done()
 	logger.Printf("shutting down")

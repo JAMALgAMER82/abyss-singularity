@@ -51,20 +51,100 @@ fn unknown_extension_returns_none() {
 #[test]
 fn refine_promotes_ambiguous_iso_via_parent_dir() {
     let p = PathBuf::from("/games/PS2/God Hand.iso");
-    assert_eq!(refine_ambiguous(Platform::Other, &p), Platform::Ps2);
+    assert_eq!(refine_ambiguous(Platform::Other, &p, "God Hand.iso", 0), Platform::Ps2);
 
     let p2 = PathBuf::from("/games/PlayStation 3/Demon's Souls/PS3_GAME.iso");
-    assert_eq!(refine_ambiguous(Platform::Other, &p2), Platform::Ps3);
+    assert_eq!(refine_ambiguous(Platform::Other, &p2, "PS3_GAME.iso", 0), Platform::Ps3);
 
+    // No path hint, no name hint, no size hint → still Other.
     let p3 = PathBuf::from("/games/Mixed Bag/whatever.iso");
-    assert_eq!(refine_ambiguous(Platform::Other, &p3), Platform::Other);
+    assert_eq!(refine_ambiguous(Platform::Other, &p3, "whatever.iso", 0), Platform::Other);
 }
 
 #[test]
 fn refine_does_not_change_an_already_specific_platform() {
     let p = PathBuf::from("/games/PS2/Super Mario 64.n64");
     // Even though the path screams "PS2", the extension is authoritative.
-    assert_eq!(refine_ambiguous(Platform::N64, &p), Platform::N64);
+    assert_eq!(refine_ambiguous(Platform::N64, &p, "Super Mario 64.n64", 0), Platform::N64);
+}
+
+#[test]
+fn refine_uses_filename_keyword_when_path_has_no_hint() {
+    // Tekken 5 .iso in a generic folder → PS2 via keyword.
+    let p = PathBuf::from("/games/Tekken 5 (USA)/Tekken 5 (USA).iso");
+    assert_eq!(
+        refine_ambiguous(Platform::Other, &p, "Tekken 5 (USA).iso", 4_483_547_136),
+        Platform::Ps2,
+    );
+}
+
+#[test]
+fn refine_uses_size_heuristic_for_psp_sized_iso() {
+    // 1.56 GB .iso in a generic folder → PSP (fits under 1.8 GB UMD cap).
+    let p = PathBuf::from("/games/New folder/Spider-Man 3.iso");
+    assert_eq!(
+        refine_ambiguous(Platform::Other, &p, "Spider-Man 3.iso", 1_683_259_392),
+        Platform::Psp,
+    );
+}
+
+#[test]
+fn refine_uses_size_heuristic_for_ps2_sized_iso() {
+    // 3 GB .iso in a generic folder with no keyword hit → PS2 by size.
+    let p = PathBuf::from("/games/whatever/Mystery Game.iso");
+    assert_eq!(
+        refine_ambiguous(Platform::Other, &p, "Mystery Game.iso", 3 * 1024 * 1024 * 1024),
+        Platform::Ps2,
+    );
+}
+
+#[test]
+fn refine_defaults_cue_to_ps1() {
+    // .cue files have no useful size signal (descriptor is ~1 KB).
+    // Pepsiman is the canonical example — PS1 disc rip, no PS1 hint
+    // in the folder name. Should land on PS1 by ecosystem convention.
+    let p = PathBuf::from("/roms/Pepsiman (Japan)/Pepsiman (Japan).cue");
+    assert_eq!(
+        refine_ambiguous(Platform::Other, &p, "Pepsiman (Japan).cue", 0),
+        Platform::Ps1,
+    );
+}
+
+#[test]
+fn refine_sub_750mb_iso_lands_on_ps1() {
+    // 600 MB .iso with no keyword hint → PS1 (CD-era PS1 game).
+    let p = PathBuf::from("/roms/some folder/Game.iso");
+    assert_eq!(
+        refine_ambiguous(Platform::Other, &p, "Game.iso", 600 * 1024 * 1024),
+        Platform::Ps1,
+    );
+}
+
+#[test]
+fn refine_2_4_gb_iso_lands_on_ps2_not_other() {
+    // The Downhill Domination case — 2.4 GB .iso should be PS2, not Other.
+    let p = PathBuf::from("/roms/Downhill Domination (USA)/Downhill Domination (USA).iso");
+    assert_eq!(
+        refine_ambiguous(Platform::Other, &p, "Downhill Domination (USA).iso", 2_413_600_000),
+        Platform::Ps2,
+    );
+}
+
+#[test]
+fn refine_5_gb_iso_lands_on_wii() {
+    // 5 GB Wii dual-layer territory.
+    let p = PathBuf::from("/roms/Wii Sports Resort/disc.iso");
+    let sz: u64 = 5 * 1024 * 1024 * 1024;
+    assert_eq!(refine_ambiguous(Platform::Other, &p, "disc.iso", sz), Platform::Wii);
+}
+
+#[test]
+fn refine_10_gb_iso_lands_on_ps3_not_wii() {
+    // Above Wii's 8.5 GB physical max — must be PS3 Blu-ray.
+    // Real-world: Mortal Kombat Komplete Edition is 10.35 GB.
+    let p = PathBuf::from("/roms/MK Komplete/MK Komplete.iso");
+    let sz: u64 = (10.35 * 1024.0 * 1024.0 * 1024.0) as u64;
+    assert_eq!(refine_ambiguous(Platform::Other, &p, "MK Komplete.iso", sz), Platform::Ps3);
 }
 
 // ---------- name normalisation ---------------------------------------------
@@ -109,6 +189,62 @@ fn scanner_picks_up_known_extensions_and_ignores_noise() {
     assert!(platforms.contains(&Platform::Snes));
     assert!(platforms.contains(&Platform::Ps2));
     assert!(report.elapsed_ms < 60_000, "scan should finish quickly on a tmpdir");
+}
+
+#[test]
+fn scanner_dedups_disc_tracks_under_a_cue() {
+    // Reproduces the "Twisted Metal 2 shows up 12 times" bug — a PS1 CD
+    // rip with a .cue plus 12 audio/data .bin tracks in the same folder.
+    // After the descriptor-aware dedup, only the .cue should land in
+    // the library; the 12 .bins are siblings the cue already represents.
+    let dir = tempdir();
+    let root = dir.path().to_path_buf();
+    let game_dir = root.join("PS1").join("Twisted Metal 2 (USA)");
+    fs::create_dir_all(&game_dir).unwrap();
+    write_file(&game_dir.join("Twisted Metal 2 (USA).cue"), 2 * 1024);
+    for i in 1..=12 {
+        write_file(&game_dir.join(format!("Twisted Metal 2 (USA) (Track {i:02}).bin")), 64 * 1024);
+    }
+
+    let (report, entries) = scan_collect(std::slice::from_ref(&root), &[], &NoopSink);
+
+    assert_eq!(report.games_found, 1, "expected just the .cue, got {entries:?}");
+    assert_eq!(entries[0].extension, "cue");
+    assert_eq!(entries[0].platform, Platform::Ps1);
+}
+
+#[test]
+fn scanner_dedups_multi_disc_under_m3u() {
+    // Three-disc PS1 game with a .m3u playlist pointing at each disc's
+    // .cue. The .m3u is the "game"; the per-disc .cue + .bin should
+    // both fold into it.
+    let dir = tempdir();
+    let root = dir.path().to_path_buf();
+    let game_dir = root.join("PS1").join("Final Fantasy IX (USA)");
+    fs::create_dir_all(&game_dir).unwrap();
+    write_file(&game_dir.join("Final Fantasy IX.m3u"), 1 * 1024);
+    for disc in 1..=3 {
+        write_file(&game_dir.join(format!("Final Fantasy IX (Disc {disc}).cue")), 2 * 1024);
+        write_file(&game_dir.join(format!("Final Fantasy IX (Disc {disc}).bin")), 64 * 1024);
+    }
+
+    let (report, _entries) = scan_collect(std::slice::from_ref(&root), &[], &NoopSink);
+
+    assert_eq!(report.games_found, 1, "expected just the .m3u");
+}
+
+#[test]
+fn scanner_keeps_standalone_iso_without_a_cue() {
+    // A bare .iso (no cue / m3u sibling) is still indexed normally.
+    let dir = tempdir();
+    let root = dir.path().to_path_buf();
+    fs::create_dir_all(root.join("PS2")).unwrap();
+    write_file(&root.join("PS2/Tekken 5.iso"), 64 * 1024);
+
+    let (report, entries) = scan_collect(std::slice::from_ref(&root), &[], &NoopSink);
+
+    assert_eq!(report.games_found, 1);
+    assert_eq!(entries[0].extension, "iso");
 }
 
 #[test]

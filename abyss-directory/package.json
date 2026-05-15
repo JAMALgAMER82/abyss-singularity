@@ -1,0 +1,18 @@
+{
+  "name": "abyss-directory",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Cloudflare Worker — directory service for Abyss Singularity (presence, friend requests, DMs, global chat).",
+  "scripts": {
+    "dev":      "wrangler dev",
+    "deploy":   "wrangler deploy",
+    "tail":     "wrangler tail",
+    "init-db":  "wrangler d1 execute abyss-directory --remote --file=./schema.sql",
+    "init-db-local": "wrangler d1 execute abyss-directory --local --file=./schema.sql"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20240117.0",
+    "typescript": "^5.4.0",
+    "wrangler": "^3.40.0"
+  }
+}

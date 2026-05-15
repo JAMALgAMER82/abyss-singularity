@@ -55,3 +55,28 @@ export const probeRegions    = () => invoke<ProbeReport>("net_probe_regions");
 export const myProfile       = () => invoke<LatencyProfile>("net_my_profile");
 export const recommendPair   = (p1: LatencyProfile, p2: LatencyProfile) =>
   invoke<RecommendedRegion | null>("net_recommend_pair", { p1, p2 });
+
+// ---------------------- Phase 12 — invite codes ----------------------
+
+export interface NetworkConfig {
+  host_invite_authkey: string | null;
+  host_display_name:   string | null;
+  redeemed_authkey:    string | null;
+  redeemed_from:       string | null;
+}
+
+export const netGetConfig = () => invoke<NetworkConfig>("net_get_config");
+
+/** Persist the host-side Tailscale auth key + display name. Empty strings clear them. */
+export const netSetInviteConfig = (authkey: string, displayName: string) =>
+  invoke<void>("net_set_invite_config", { authkey, displayName });
+
+/** Returns a paste-able invite code wrapping the persisted auth key. */
+export const netCreateInvite = () => invoke<string>("net_create_invite");
+
+/** Returns the host's display name if successful. Respawns the mesh sidecar. */
+export const netRedeemInvite = (code: string) =>
+  invoke<string>("net_redeem_invite", { code });
+
+export const netClearRedeemedInvite = () =>
+  invoke<void>("net_clear_redeemed_invite");

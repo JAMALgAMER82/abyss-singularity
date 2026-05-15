@@ -149,4 +149,20 @@ pub struct LibraryConfig {
     /// the user finishes (or explicitly skips) the wizard.
     #[serde(default)]
     pub wizard_completed_at: Option<DateTime<Utc>>,
+    /// Timestamp of the auto-streaming-apps install attempt (Sunshine +
+    /// Moonlight + Tailscale). Set on first launch — either after the
+    /// install completes OR after it fails. Used purely as an "already
+    /// tried, don't pester again" marker so we don't re-pop UAC every
+    /// time the app starts. The install command itself is idempotent
+    /// (skips per-app if already present), so manually-installed apps
+    /// remain untouched.
+    #[serde(default)]
+    pub streaming_apps_attempted_at: Option<DateTime<Utc>>,
+    /// Timestamp of the auto-emulators install attempt. Set at the **start**
+    /// of `installer_install_all` so any subsequent caller (wizard button,
+    /// launch-error banner, background auto-task) sees it and skips,
+    /// avoiding a race where two flows download the same emulator.zip in
+    /// parallel and clobber each other's `.download` temp file.
+    #[serde(default)]
+    pub emulators_install_attempted_at: Option<DateTime<Utc>>,
 }

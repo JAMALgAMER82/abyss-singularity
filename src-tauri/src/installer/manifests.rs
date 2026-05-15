@@ -66,17 +66,18 @@ pub fn all() -> Vec<EmulatorManifest> {
             embeddable:     false,
         },
 
-        // RPCS3 — PS3. Continuously released, single rolling URL.
+        // RPCS3 — PS3. Versioned asset names; resolved via GitHub API at
+        // install time so we don't bit-rot on every release.
         EmulatorManifest {
             id:             "rpcs3".into(),
             name:           "RPCS3 (PlayStation 3)".into(),
             homepage:       "https://rpcs3.net/".into(),
             license:        "GPLv2".into(),
-            url:            "https://github.com/RPCS3/rpcs3-binaries-win/releases/latest/download/rpcs3.7z".into(),
+            url:            "gh-latest://RPCS3/rpcs3-binaries-win/win64_msvc".into(),
             archive_format: ArchiveFormat::SevenZ,
             exe_relpath:    "rpcs3.exe".into(),
             platforms:      vec![Platform::Ps3],
-            approx_size_mb: 130,
+            approx_size_mb: 35,
             embeddable:     false,
         },
 
@@ -150,46 +151,66 @@ pub fn all() -> Vec<EmulatorManifest> {
             embeddable:     true,
         },
 
-        // Project64 — long-running N64 emulator.
+        // Simple64 (formerly Project64-Legacy line). Project64's own repo
+        // has zero published releases now — Simple64 is the maintained
+        // N64 emulator with regular Windows builds.
         EmulatorManifest {
-            id:             "project64".into(),
-            name:           "Project64 (Nintendo 64)".into(),
-            homepage:       "https://www.pj64-emu.com/".into(),
-            license:        "GPLv2".into(),
-            url:            "https://github.com/project64/project64/releases/download/3.0.1/Project64-3.0.1-7-c5c.zip".into(),
+            id:             "project64".into(),  // keep id stable so existing assignments still resolve
+            name:           "Simple64 (Nintendo 64)".into(),
+            homepage:       "https://simple64.github.io/".into(),
+            license:        "GPLv3".into(),
+            url:            "gh-latest://simple64/simple64/win64".into(),
             archive_format: ArchiveFormat::Zip,
-            exe_relpath:    "Project64.exe".into(),
+            exe_relpath:    "simple64-gui.exe".into(),
             platforms:      vec![Platform::N64],
-            approx_size_mb: 20,
-            embeddable:     true,
-        },
-
-        // PCSX-Redux — modern PS1 alternative to DuckStation.
-        EmulatorManifest {
-            id:             "pcsx-redux".into(),
-            name:           "PCSX-Redux (PlayStation)".into(),
-            homepage:       "https://pcsx-redux.consoledev.net/".into(),
-            license:        "GPLv2".into(),
-            url:            "https://github.com/grumpycoders/pcsx-redux/releases/download/v25.04.0/pcsx-redux-windows-x86_64.zip".into(),
-            archive_format: ArchiveFormat::Zip,
-            exe_relpath:    "pcsx-redux.exe".into(),
-            platforms:      vec![Platform::Ps1],
-            approx_size_mb: 25,
+            approx_size_mb: 50,
             embeddable:     false,
         },
 
-        // Stella — Atari 2600.
+        // DuckStation — modern PS1 emulator. PCSX-Redux dropped its
+        // tagged releases (CI-only nightlies now), so we point at the
+        // DuckStation Windows release zip and keep the id stable.
+        EmulatorManifest {
+            id:             "pcsx-redux".into(),  // keep id stable so existing assignments still resolve
+            name:           "DuckStation (PlayStation)".into(),
+            homepage:       "https://www.duckstation.org/".into(),
+            license:        "GPLv3".into(),
+            url:            "gh-latest://stenzek/duckstation/duckstation-windows-x64-release.zip".into(),
+            archive_format: ArchiveFormat::Zip,
+            exe_relpath:    "duckstation-qt-x64-ReleaseLTCG.exe".into(),
+            platforms:      vec![Platform::Ps1],
+            approx_size_mb: 66,
+            embeddable:     false,
+        },
+
+        // Stella — Atari 2600. Asset filename is `Stella-7.0c-windows.zip`
+        // (point release); using a substring match keeps us version-stable.
         EmulatorManifest {
             id:             "stella".into(),
             name:           "Stella (Atari 2600)".into(),
             homepage:       "https://stella-emu.github.io/".into(),
             license:        "GPLv2".into(),
-            url:            "https://github.com/stella-emu/stella/releases/download/7.0/Stella-7.0-x64.zip".into(),
+            url:            "gh-latest://stella-emu/stella/windows.zip".into(),
             archive_format: ArchiveFormat::Zip,
-            exe_relpath:    "Stella-7.0/64-bit/Stella.exe".into(),
+            exe_relpath:    "Stella.exe".into(),
             platforms:      vec![Platform::Atari2600],
-            approx_size_mb: 12,
+            approx_size_mb: 5,
             embeddable:     true,
+        },
+
+        // Flycast — Dreamcast / Naomi / Atomiswave. Standalone release of
+        // the libretro Flycast core; works without RetroArch.
+        EmulatorManifest {
+            id:             "flycast".into(),
+            name:           "Flycast (Dreamcast)".into(),
+            homepage:       "https://github.com/flyinghead/flycast".into(),
+            license:        "GPLv2".into(),
+            url:            "gh-latest://flyinghead/flycast/win64".into(),
+            archive_format: ArchiveFormat::Zip,
+            exe_relpath:    "flycast.exe".into(),
+            platforms:      vec![Platform::Dreamcast],
+            approx_size_mb: 30,
+            embeddable:     false,
         },
     ]
 }

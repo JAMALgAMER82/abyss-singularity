@@ -31,6 +31,9 @@ import {
   type InstallProgress,
 } from "../lib/installer";
 import { ControllerSection } from "../components/ControllerSection";
+import { AboutSection } from "../components/AboutSection";
+import { DiagnosticsSection } from "../components/DiagnosticsSection";
+import { DirectorySection } from "../components/DirectorySection";
 
 export function SettingsView() {
   const [config, setConfig]   = useState<LibraryConfig | null>(null);
@@ -370,32 +373,49 @@ export function SettingsView() {
             {!orch || orch.emulators.length === 0 ? (
               <li className="px-4 py-3 text-xs text-abyss-fg-dim">
                 No emulators configured. Click <em>Seed from recipes</em> to bootstrap the standard
-                set (RetroArch, Dolphin, PCSX2, RPCS3, Ryujinx, mGBA, …).
+                set (RetroArch, Dolphin, PCSX2, RPCS3, PPSSPP, Cemu, Simple64, DuckStation,
+                mGBA, DeSmuME, Snes9x, Stella, Flycast).
               </li>
             ) : (
-              orch.emulators.map((e) => (
-                <li key={e.id} className="px-4 py-3">
-                  <div className="flex items-center gap-3">
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-abyss-fg">{e.name}</p>
-                      <p className="mt-0.5 truncate font-mono text-[11px] text-abyss-fg-dim">
-                        {e.exe || <span className="text-abyss-danger/80">no exe configured</span>}
-                      </p>
-                      <p className="mt-1 flex flex-wrap gap-1">
-                        {e.platforms.map((p) => (
-                          <span key={p} className={platformBadge}>{PLATFORM_DISPLAY[p]}</span>
-                        ))}
-                      </p>
+              orch.emulators.map((e) => {
+                // `pc-direct` is a synthetic launcher: PC games' own
+                // .exe / .lnk / .bat files ARE the program, so the
+                // emulator entry's `exe` field is intentionally empty
+                // and ignored by the launcher (see commands.rs:79).
+                // Don't pester the user to set one.
+                const isDirectLauncher = e.id === "pc-direct";
+                return (
+                  <li key={e.id} className="px-4 py-3">
+                    <div className="flex items-center gap-3">
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-abyss-fg">{e.name}</p>
+                        <p className="mt-0.5 truncate font-mono text-[11px] text-abyss-fg-dim">
+                          {e.exe
+                            ? e.exe
+                            : isDirectLauncher
+                              ? <span className="text-abyss-fg-muted/80">launches each game by its own path · no emulator needed</span>
+                              : <span className="text-abyss-danger/80">no exe configured</span>}
+                        </p>
+                        <p className="mt-1 flex flex-wrap gap-1">
+                          {e.platforms.map((p) => (
+                            <span key={p} className={platformBadge}>{PLATFORM_DISPLAY[p]}</span>
+                          ))}
+                        </p>
+                      </div>
+                      {!isDirectLauncher && (
+                        <button type="button" onClick={() => pickEmulatorExe(e.id)} className={cardBtn}>
+                          {e.exe ? "Change exe" : "Choose exe"}
+                        </button>
+                      )}
+                      {!isDirectLauncher && (
+                        <button type="button" onClick={() => deleteEmulator(e.id)} className={destructiveSmallBtn}>
+                          Remove
+                        </button>
+                      )}
                     </div>
-                    <button type="button" onClick={() => pickEmulatorExe(e.id)} className={cardBtn}>
-                      {e.exe ? "Change exe" : "Choose exe"}
-                    </button>
-                    <button type="button" onClick={() => deleteEmulator(e.id)} className={destructiveSmallBtn}>
-                      Remove
-                    </button>
-                  </div>
-                </li>
-              ))
+                  </li>
+                );
+              })
             )}
           </ul>
         </section>
@@ -436,11 +456,21 @@ export function SettingsView() {
 
         {/* ============================== STREAMING BINARIES ============================== */}
         <section>
-          <h3 className="text-sm font-semibold text-abyss-fg">Streaming binaries</h3>
-          <p className="mt-0.5 mb-2 text-xs text-abyss-fg-muted">
-            Point at user-installed Sunshine (host) and Moonlight (client) binaries.
-            Phase 5 uses these for the <em>Stream</em> view.
-          </p>
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h3 className="text-sm font-semibold text-abyss-fg">Streaming binaries</h3>
+              <p className="mt-0.5 mb-2 text-xs text-abyss-fg-muted">
+                Sunshine (game-streaming host), Moonlight (client), and the standalone Tailscale
+                Windows client — Abyss downloads each directly from its official source and runs
+                the installer. Sunshine + Tailscale each trigger a one-time UAC prompt for their
+                system services; Moonlight is silent. Already-installed copies are detected and
+                skipped. Tailscale standalone is optional — Abyss already has its own embedded
+                tailnet stack in <code className="font-mono text-abyss-fg-muted">abyss-mesh.exe</code>,
+                but the standalone gives you the system-tray UI for managing your tailnet.
+              </p>
+            </div>
+            <StreamingAutoInstallButton onDone={async () => setStream(await streamGetConfig())} />
+          </div>
           <ul className="divide-y divide-abyss-border rounded-md border border-abyss-border bg-abyss-panel/40">
             {[
               { kind: "sunshine" as const,  label: "Sunshine host",      exe: stream?.sunshine_exe ?? null },
@@ -517,6 +547,15 @@ export function SettingsView() {
             {error}
           </p>
         )}
+
+        {/* ============================== DIRECTORY (Discover) ============================ */}
+        <DirectorySection />
+
+        {/* ============================== DIAGNOSTICS ============================ */}
+        <DiagnosticsSection />
+
+        {/* ============================== ABOUT ============================ */}
+        <AboutSection />
       </div>
     </div>
   );
@@ -541,6 +580,38 @@ const inputClass = `
   font-mono text-xs text-abyss-fg placeholder:text-abyss-fg-dim
   focus:border-abyss-accent/60 focus:outline-none
 `;
+
+function StreamingAutoInstallButton({ onDone }: { onDone: () => Promise<void> }) {
+  const [running, setRunning] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const click = useCallback(async () => {
+    setRunning(true);
+    setMsg(null);
+    try {
+      const { installerInstallStreamingApps } = await import("../lib/installer");
+      const r = await installerInstallStreamingApps();
+      await onDone();
+      setMsg(r.messages.join(" "));
+    } catch (e) {
+      setMsg(String(e));
+    } finally {
+      setRunning(false);
+    }
+  }, [onDone]);
+  return (
+    <div className="flex flex-col items-end gap-1">
+      <button
+        type="button"
+        onClick={click}
+        disabled={running}
+        className="h-8 shrink-0 rounded-md border border-abyss-accent/60 bg-abyss-accent/10 px-3 text-sm font-medium text-abyss-accent hover:bg-abyss-accent/20 disabled:opacity-50 disabled:cursor-not-allowed"
+      >
+        {running ? "Installing…" : "Install Sunshine + Moonlight + Tailscale"}
+      </button>
+      {msg && <p className="max-w-xs text-right text-[10px] text-abyss-fg-dim">{msg}</p>}
+    </div>
+  );
+}
 
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;

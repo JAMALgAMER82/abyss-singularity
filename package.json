@@ -2,6 +2,12 @@
   "name": "abyss-singularity",
   "private": true,
   "version": "0.1.0",
+  "author": "MasterMind George",
+  "description": "Cross-continental co-op gaming hub. By MasterMind George.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/JAMALgAMER82/abyss-singularity"
+  },
   "type": "module",
   "scripts": {
     "dev": "vite",

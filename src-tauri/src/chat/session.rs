@@ -153,6 +153,32 @@ fn handle_frame<RT: Runtime>(
         ChatProtocol::FileAccept { transfer_id, accept, resume_offset, .. } => {
             crate::transfer::commands::on_inbound_accept(app, &transfer_id, accept, resume_offset);
         }
+
+        // Phase 12 — lobby frames. Each variant has a dedicated handler in
+        // crate::lobby::handlers so this match stays a one-liner per arm.
+        ChatProtocol::LobbyAdvertise { host_name, platform, game_name, members, .. } => {
+            crate::lobby::handlers::on_advertise(app, peer_label, host_name, platform, game_name, members);
+        }
+        ChatProtocol::LobbyJoinRequest { display_name, .. } => {
+            crate::lobby::handlers::on_join_request(app, peer_label, display_name);
+        }
+        ChatProtocol::LobbyJoinAccepted { platform, game_name, .. } => {
+            crate::lobby::handlers::on_join_accepted(app, peer_label, platform, game_name);
+        }
+        ChatProtocol::LobbyLeave { .. } | ChatProtocol::LobbyClose { .. } => {
+            crate::lobby::handlers::on_close_or_leave(app, peer_label);
+        }
+        ChatProtocol::LobbyStartGame { platform, game_name, host_addr, .. } => {
+            crate::lobby::handlers::on_start_game(app, host_addr, platform, game_name);
+        }
+
+        // Phase 13 — auto-pair flow between friend (initiator) and host.
+        ChatProtocol::StreamPairOffer { pin, .. } => {
+            crate::streaming::pairing::on_pair_offer(app, peer_label, pin);
+        }
+        ChatProtocol::StreamPairResult { ok, error, .. } => {
+            crate::streaming::pairing::on_pair_result(app, peer_label, ok, error);
+        }
     }
 }
 

@@ -1,0 +1,28 @@
+# wrangler config for the Abyss Singularity directory worker.
+#
+# Two steps to deploy:
+#   1. Edit the database_id below to match the D1 you create:
+#        wrangler d1 create abyss-directory
+#      Copy the printed UUID into d1_databases.database_id.
+#   2. Initialise the schema (D1 starts empty):
+#        npm run init-db
+#   3. Deploy:
+#        npm run deploy
+#
+# The free tier covers: 100 k req/day on Workers, 5 M reads + 100 k writes/day
+# on D1. Comfortable for a ~70-user friend group on a 1-minute heartbeat
+# or ~350 users on a 5-minute heartbeat (the Abyss default).
+
+name           = "abyss-directory"
+main           = "src/index.ts"
+compatibility_date = "2026-05-15"
+
+# Daily prune of old DMs / chat / rate-limit rows. Worker.scheduled handles it.
+[triggers]
+crons = ["0 6 * * *"]   # 06:00 UTC every day
+
+[[d1_databases]]
+binding       = "DB"
+database_name = "abyss-directory"
+# Replace with the UUID `wrangler d1 create abyss-directory` prints.
+database_id   = "8a464457-3bcb-4f47-8ef2-c706eed04782"

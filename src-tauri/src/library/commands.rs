@@ -116,9 +116,25 @@ pub async fn library_enrich_metadata<R: Runtime>(
 
     let cfg = config::load(&app).map_err(|e| format!("{e:#}"))?;
     let client_id     = cfg.igdb_client_id.clone()
-        .ok_or_else(|| "IGDB client_id not set — add it under Settings".to_string())?;
+        .ok_or_else(|| "IGDB client_id not set — add it under Settings → Library".to_string())?;
     let client_secret = cfg.igdb_client_secret.clone()
-        .ok_or_else(|| "IGDB client_secret not set — add it under Settings".to_string())?;
+        .ok_or_else(|| "IGDB client_secret not set — add it under Settings → Library".to_string())?;
+    // Soft-validate the shape: a real IGDB / Twitch client_id is 30
+    // characters, all lowercase alphanumeric. Placeholders like "gg22"
+    // / "1234" will return 401 from every lookup and produce a wave of
+    // "errors" in the toast — short-circuit with a clear message so the
+    // user knows what to fix.
+    let looks_real = |s: &str| s.len() >= 20
+        && s.chars().all(|c| c.is_ascii_alphanumeric());
+    if !looks_real(&client_id) || !looks_real(&client_secret) {
+        return Err(
+            "IGDB credentials look like placeholders. Get real ones at \
+             https://api-docs.igdb.com/#getting-started (free) and paste \
+             them under Settings → Library → IGDB credentials. Cover art \
+             enrichment is optional — your library still works without it."
+                .into()
+        );
+    }
     let client = IgdbClient::new(client_id, client_secret)
         .map_err(|e| format!("{e:#}"))?;
 

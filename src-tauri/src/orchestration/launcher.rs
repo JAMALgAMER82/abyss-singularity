@@ -14,7 +14,7 @@ use std::sync::Mutex;
 
 use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
-use tauri::{AppHandle, Emitter, Runtime};
+use tauri::{AppHandle, Emitter, Manager, Runtime};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::oneshot;
@@ -110,7 +110,16 @@ pub async fn spawn_and_track<R: Runtime>(
         .stderr(Stdio::piped())
         .stdin(Stdio::null())
         .kill_on_drop(false);
-    if let Some(dir) = &working_dir {
+    // Default CWD to the emulator's own install dir, not whatever Abyss
+    // happens to have. Many emulators (PCSX2 v2 Qt, RPCS3, Cemu,
+    // DuckStation) look for config/, bios/, plugins/ relative to CWD and
+    // silently fail or open to a setup wizard when launched from a
+    // different directory. Manual double-click works because Windows
+    // sets CWD = install dir; we need to mirror that behaviour.
+    let effective_dir = working_dir
+        .clone()
+        .or_else(|| exe.parent().map(std::path::PathBuf::from));
+    if let Some(dir) = &effective_dir {
         cmd.current_dir(dir);
     }
     for (k, v) in &env {
@@ -163,6 +172,13 @@ pub async fn spawn_and_track<R: Runtime>(
             }
         };
         log::info!("orch: exit {} code {:?}", run_id_for_join, code);
+        // Restore the Abyss window we minimised before launch so the
+        // user lands back on the library UI without rummaging in the
+        // taskbar.
+        if let Some(win) = app_for_join.get_webview_window("main") {
+            let _ = win.unminimize();
+            let _ = win.set_focus();
+        }
         let _ = app_for_join.emit(
             LAUNCH_EVENT,
             LaunchEvent::Exited { run_id: run_id_for_join.clone(), code },

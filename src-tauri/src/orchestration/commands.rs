@@ -74,13 +74,49 @@ pub async fn orch_launch<R: Runtime>(
     }
 
     // 3. Expand args and launch.
-    let args = expand_args(&emulator.args, &entry);
+    let mut args = expand_args(&emulator.args, &entry);
     // For PC platforms the emulator is "pc-direct" and the game itself is the exe.
     let exe = if emulator.id == "pc-direct" {
         entry.path.clone()
     } else {
         emulator.exe.clone()
     };
+
+    // RetroArch needs `-L <core.dll>` to auto-launch a specific libretro
+    // core — without it, the frontend opens its menu asking the user to
+    // pick a core. Pick the right .dll based on the game's platform and
+    // prepend it. Cores live in `<retroarch_dir>/RetroArch-Win64/cores/`.
+    if emulator.id == "retroarch" {
+        if let Some(core_name) = super::recipes::retroarch_core_for(entry.platform) {
+            let core_path = exe
+                .parent()
+                .map(|p| p.join("cores").join(core_name));
+            if let Some(p) = core_path {
+                if p.exists() {
+                    args.insert(0, p.to_string_lossy().into_owned());
+                    args.insert(0, "-L".into());
+                } else {
+                    log::warn!("retroarch core missing for {:?}: {}", entry.platform, p.display());
+                }
+            }
+        }
+
+        // libretro core file-opener workaround: Genesis Plus GX and a
+        // handful of other cores can't open paths containing `(` / `)`
+        // (verified 2026-05-14 on Mega Drive ROMs like
+        // "OutRun (Japan).md"). RetroArch loads fine, the core's fopen
+        // call returns "Unable to open file" and the launch exits 1.
+        // If the game path contains those characters, hard-link or copy
+        // the ROM to a sanitised filename under %TEMP% and substitute it
+        // into the args. The link lives until the next launch wipes it.
+        if let Some(safe_path) = sanitised_path_for_libretro(&entry.path) {
+            for arg in args.iter_mut() {
+                if std::path::Path::new(arg.as_str()) == entry.path.as_path() {
+                    *arg = safe_path.to_string_lossy().into_owned();
+                }
+            }
+        }
+    }
 
     let handle = spawn_and_track(
         app.clone(),
@@ -97,36 +133,95 @@ pub async fn orch_launch<R: Runtime>(
     .await
     .map_err(|e| format!("{e:#}"))?;
 
-    // Try to embed the emulator window into the Abyss main window when
-    // the emulator is one we've confirmed reparents cleanly. The user's
-    // "everything inside the app" requirement lands here.
-    #[cfg(target_os = "windows")]
-    {
-        if super::recipes::is_embeddable(&emulator.id) {
-            if let Some(host_hwnd) = main_window_hwnd(&app) {
-                let pid = handle.pid;
-                tauri::async_runtime::spawn(async move {
-                    use std::time::Duration;
-                    if let Err(e) = super::embed::embed_window(host_hwnd, pid, Duration::from_secs(8)).await {
-                        log::warn!("orch: window embed failed for pid {pid}: {e:#}");
-                    } else {
-                        log::info!("orch: embedded pid {pid} into main window");
-                    }
-                });
-            }
-        }
+    // "One-app" feel without SetParent: minimise the Abyss window so the
+    // emulator owns the screen. The launcher's exit watcher restores it
+    // when the game closes (see launcher.rs after the child wait).
+    if let Some(win) = app.get_webview_window("main") {
+        let _ = win.minimize();
     }
 
     Ok(handle)
 }
 
+/// If `original` contains characters known to break some libretro core
+/// file openers (`(`, `)`), copy/link the file to a sanitised name
+/// under `%TEMP%` and return the new path. Returns `None` when no
+/// sanitisation is needed. Best-effort: failures fall back to using
+/// the original path (which is what would happen anyway without us).
+///
+/// **Crucially skips multi-file game formats** — a `.cue` file is just
+/// a tiny text descriptor that references sibling `.bin` tracks by
+/// relative path. Hard-linking the .cue into a sanitised-name temp dir
+/// without also linking the .bin tracks makes the core fail to open
+/// the actual data ("Pepsiman (Japan).cue" symptom — exits 1 in 139ms,
+/// no stderr, looks like a generic crash). Modern RetroArch handles
+/// parens fine in the multi-file path, so just pass through.
 #[cfg(target_os = "windows")]
-fn main_window_hwnd<R: Runtime>(app: &AppHandle<R>) -> Option<isize> {
-    use tauri::Manager as _;
-    let win = app.get_webview_window("main")?;
-    let raw = win.hwnd().ok()?;
-    Some(raw.0 as isize)
+fn sanitised_path_for_libretro(original: &std::path::Path) -> Option<std::path::PathBuf> {
+    let name = original.file_name()?.to_str()?;
+    if !name.contains('(') && !name.contains(')') && !name.contains('[') && !name.contains(']') {
+        return None;
+    }
+    let stem = original.file_stem()?.to_str()?;
+    let ext  = original.extension().and_then(|e| e.to_str()).unwrap_or("");
+
+    // Multi-file disc-image / playlist descriptors — sibling files would
+    // need linking too. Bail out of sanitisation rather than ship a half-
+    // sanitised set that breaks the load. (Modern RetroArch + every core
+    // we ship handles parens in this path.)
+    const MULTI_FILE_DESCRIPTORS: &[&str] = &[
+        "cue",  // CD-ROM track descriptor → .bin
+        "gdi",  // Dreamcast track descriptor → .raw / .bin
+        "ccd",  // CloneCD descriptor → .img / .sub
+        "toc",  // CD-text descriptor → various
+        "m3u",  // multi-disc playlist → .cue / .iso
+        "mds",  // Alcohol descriptor → .mdf
+    ];
+    if MULTI_FILE_DESCRIPTORS.iter().any(|e| e.eq_ignore_ascii_case(ext)) {
+        log::info!(
+            "libretro: skipping paren-sanitisation for multi-file descriptor {} \
+             (would orphan sibling tracks)",
+            name
+        );
+        return None;
+    }
+
+    // Strip everything that's not [A-Za-z0-9._-] from the stem.
+    let safe_stem: String = stem.chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_' { c } else { '_' })
+        .collect();
+    let safe_stem = safe_stem.trim_matches('_').to_string();
+    if safe_stem.is_empty() { return None; }
+
+    let dir = std::env::temp_dir().join("abyss-libretro-roms");
+    if std::fs::create_dir_all(&dir).is_err() { return None; }
+    let dest = if ext.is_empty() { dir.join(&safe_stem) } else { dir.join(format!("{safe_stem}.{ext}")) };
+
+    // Avoid re-copying when the existing copy already matches the source.
+    let src_meta = std::fs::metadata(original).ok();
+    let dst_meta = std::fs::metadata(&dest).ok();
+    let same_size_modified = match (src_meta.as_ref(), dst_meta.as_ref()) {
+        (Some(s), Some(d)) => s.len() == d.len() && s.modified().ok() == d.modified().ok(),
+        _ => false,
+    };
+    if !same_size_modified {
+        let _ = std::fs::remove_file(&dest);
+        // Try a hard link first (instant, zero disk overhead) — only
+        // works on the same volume. Fall back to a copy otherwise.
+        if std::fs::hard_link(original, &dest).is_ok() {
+            log::info!("libretro: hard-linked {} -> {} for paren-safe path", original.display(), dest.display());
+        } else if std::fs::copy(original, &dest).is_ok() {
+            log::info!("libretro: copied {} -> {} for paren-safe path", original.display(), dest.display());
+        } else {
+            log::warn!("libretro: couldn't sanitise path for {}", original.display());
+            return None;
+        }
+    }
+    Some(dest)
 }
+
+#[cfg(not(target_os = "windows"))]
+fn sanitised_path_for_libretro(_original: &std::path::Path) -> Option<std::path::PathBuf> { None }
 
 #[tauri::command]
 pub fn orch_terminate(

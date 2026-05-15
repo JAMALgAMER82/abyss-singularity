@@ -40,25 +40,27 @@ fn retroarch_covers_the_major_retro_platforms() {
 }
 
 #[test]
-fn urls_are_https_only() {
+fn urls_are_https_or_gh_latest() {
+    // `gh-latest://owner/repo/asset-substring` is resolved at install time
+    // by the GitHub releases API and ultimately fetches an https asset.
     for m in manifests::all() {
         assert!(
-            m.url.starts_with("https://"),
-            "{} download URL is not https: {}", m.id, m.url,
+            m.url.starts_with("https://") || m.url.starts_with("gh-latest://"),
+            "{} download URL is not https or gh-latest: {}", m.id, m.url,
         );
     }
 }
 
 #[test]
 fn embeddable_flags_are_set_intentionally() {
-    // RetroArch / mGBA / PPSSPP / DeSmuME are the simple Win32 UIs we've
-    // confirmed embed cleanly via SetParent. The modern Qt-based ones
-    // (PCSX2 v2, RPCS3) and Dolphin are explicitly false so the UI knows
-    // to fall back to the minimise-and-restore launch flow.
+    // RetroArch / mGBA / PPSSPP / DeSmuME / Snes9x / Stella are simple
+    // Win32 UIs we've confirmed embed cleanly via SetParent. Qt-based
+    // emulators (PCSX2 v2, RPCS3, Simple64 [project64 id], DuckStation
+    // [pcsx-redux id]) and Dolphin/Cemu fall back to minimise-and-restore.
     for m in manifests::all() {
         match m.id.as_str() {
-            "retroarch" | "mgba" | "ppsspp" | "desmume" | "snes9x" | "project64" | "stella" => assert!(m.embeddable),
-            "pcsx2" | "rpcs3" | "dolphin" | "cemu" | "pcsx-redux"                            => assert!(!m.embeddable),
+            "retroarch" | "mgba" | "ppsspp" | "desmume" | "snes9x" | "stella" => assert!(m.embeddable),
+            "pcsx2" | "rpcs3" | "dolphin" | "cemu" | "pcsx-redux" | "project64" | "flycast" => assert!(!m.embeddable),
             other => panic!("unknown manifest id {other} — update this test"),
         }
     }

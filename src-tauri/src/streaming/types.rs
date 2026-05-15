@@ -10,6 +10,14 @@ pub struct StreamingConfig {
     /// Sunshine's web admin URL. Defaults to https://localhost:47990 (its
     /// out-of-box bind), exposed so power users can move it.
     #[serde(default)] pub sunshine_admin_url: Option<String>,
+    /// Sunshine admin username — needed to POST against /api/pin so the
+    /// in-app "Pair client" button can register a PIN without making the
+    /// user open the web UI. Cached after first successful pair.
+    #[serde(default)] pub sunshine_admin_user: Option<String>,
+    /// Matching password. Stored plaintext in settings.json (same blob
+    /// where Sunshine itself stores it under config/sunshine_state.json).
+    /// Local-only data; the file already lives outside the install dir.
+    #[serde(default)] pub sunshine_admin_pass: Option<String>,
     #[serde(default)] pub moonlight_exe: Option<PathBuf>,
     #[serde(default)] pub known_hosts:   Vec<KnownHost>,
 }

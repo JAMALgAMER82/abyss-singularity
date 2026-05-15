@@ -31,13 +31,29 @@
 :root {
   color-scheme: dark;
   font-family: var(--font-sans);
-  font-size: 14px;
+  /* Desktop base font — matches Tailwind's intended 1rem = 16px scale.
+     Was 14px, which made `text-xs` (0.75rem) render at 10.5px and the
+     whole UI feel cramped on a normal monitor. Couch mode below overrides
+     this to 22px for TV-distance viewing. */
+  font-size: 16px;
   line-height: 1.5;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
+
+/* --------------------------------------------------------------------------
+   Desktop-mode micro-label floor.
+   Several components use explicit `text-[10px]` / `text-[11px]` Tailwind
+   arbitrary values for timestamp / port / hint labels. Those pixel values
+   don't scale with the root font-size bump above, so they stay tiny.
+   Bump them to a readable floor when we're in desktop (non-couch) mode.
+   Couch mode is unaffected — it already scales rem-based classes via the
+   root font-size, and these labels are decorative there anyway.
+   -------------------------------------------------------------------------- */
+html:not(.abyss-couch) .text-\[10px\] { font-size: 12px; }
+html:not(.abyss-couch) .text-\[11px\] { font-size: 13px; }
 
 html, body, #root {
   height: 100%;

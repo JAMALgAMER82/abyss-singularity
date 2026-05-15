@@ -111,6 +111,24 @@ pub async fn chat_connect_peer<R: Runtime>(
 ) -> Result<(), String> {
     let state = global();
     let port  = port.unwrap_or(47992);
+
+    // Pre-flight: if the mesh sidecar already knows this peer is offline,
+    // skip the 8s SOCKS5 dial that would just time out — surface a clean
+    // "peer offline" message instead. We still try the dial when we can't
+    // find the peer in the status (transient lookup race, fresh peer).
+    let status = crate::network::tailscale::status().await;
+    let peer = status.peers.iter().find(|p|
+        p.addrs.iter().any(|a| a == &host)
+            || p.dns_name.as_deref() == Some(host.as_str())
+            || p.host_name == host
+    );
+    if let Some(p) = peer {
+        if !p.online {
+            let label = if !p.host_name.is_empty() { p.host_name.as_str() } else { host.as_str() };
+            return Err(format!("{label} is offline — they need to open Abyss to receive chats."));
+        }
+    }
+
     connect_and_run(app, state, host, port)
         .await
         .map_err(|e| format!("{e:#}"))

@@ -19,8 +19,5 @@ pub mod launcher;
 pub mod recipes;
 pub mod types;
 
-#[cfg(target_os = "windows")]
-pub mod embed;
-
 #[cfg(test)]
 mod tests;

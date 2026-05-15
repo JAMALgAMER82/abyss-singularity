@@ -1,4 +1,5 @@
 import type { NavId } from "../lib/nav";
+import { DiscoverView } from "./DiscoverView";
 import { FriendsView } from "./FriendsView";
 import { LibraryView } from "./LibraryView";
 import { NetworkView } from "./NetworkView";
@@ -15,4 +16,5 @@ export const VIEWS: Record<NavId, React.ReactElement> = {
   network:  <NetworkView />,
   stream:   <StreamView />,
   friends:  <FriendsView />,
+  discover: <DiscoverView />,
 };
