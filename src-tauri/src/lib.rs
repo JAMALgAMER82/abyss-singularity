@@ -68,6 +68,19 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        // X-button → hide to tray instead of exiting. The mesh sidecar,
+        // chat listener, transfer server, and directory heartbeat keep
+        // running in the background so friends can still reach the user.
+        // "Quit Abyss" in the tray menu (or app.exit() anywhere else) is
+        // the only path that actually terminates the process tree.
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() == "main" {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
+        })
         .setup(|app| {
             // Spawn the embedded Tailscale mesh sidecar at app start.
             // If this fails (e.g. binary missing in a dev build), we log
