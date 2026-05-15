@@ -73,4 +73,5 @@ pub struct GlobalChatMessage {
 pub const DIR_FRIEND_REQUEST_EVENT:    &str = "abyss://directory/friend-request";
 pub const DIR_FRIEND_RESPONSE_EVENT:   &str = "abyss://directory/friend-response";
 pub const DIR_DM_EVENT:                &str = "abyss://directory/dm";
+#[allow(dead_code)] // Reserved for the global-chat push path once the heartbeat starts polling it.
 pub const DIR_GLOBAL_CHAT_EVENT:       &str = "abyss://directory/global-chat";

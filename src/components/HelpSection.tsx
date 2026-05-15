@@ -121,6 +121,27 @@ const TOPICS: Topic[] = [
     ),
   },
   {
+    id: "controllers",
+    icon: "🎮",
+    title: "Controllers — what works automatically",
+    body: (
+      <>
+        <p>Plug it in, hit Play. Abyss seeds each emulator's config for <b>4 controller slots</b> the first time you run it, so couch co-op (up to 4 pads on one host) and local 2-player work out of the box.</p>
+        <p><b>What's auto-detected on any emulator:</b></p>
+        <ul className="list-disc pl-5 space-y-1">
+          <li>Xbox 360 / One / Series — wired or wireless</li>
+          <li>PS4 DualShock 4 (via Steam Input or DS4Windows)</li>
+          <li>PS5 DualSense (via Steam Input or DS4Windows)</li>
+          <li>Switch Pro Controller (via Steam Input or BetterJoy)</li>
+          <li>8BitDo, Logitech F310/F710, Stadia, generic XInput pads</li>
+        </ul>
+        <p><b>Native PS4/PS5 without Steam:</b> SDL-based emulators (PCSX2, DuckStation, every RetroArch core, PPSSPP, Flycast) recognise them directly via SDL's gamepad database — zero setup. Dolphin uses XInput, so PS pads need <em>Steam Input</em> or <em>DS4Windows</em> to be visible (both are free, one install).</p>
+        <p><b>Player 1 also has keyboard fallback</b> on PCSX2 and DuckStation — WASD + IJKL — useful for testing or if a pad's flat.</p>
+        <p className="text-abyss-fg-dim">⚠ If you've already customised an emulator's controller config we never overwrite it. Reset via Settings → Diagnose &amp; Repair → Run.</p>
+      </>
+    ),
+  },
+  {
     id: "bios",
     icon: "💾",
     title: "BIOS files — what each console needs",

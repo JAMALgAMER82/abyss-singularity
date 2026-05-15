@@ -170,6 +170,28 @@ No PINs to read aloud. No browser dance. Just two clicks.
 
 ---
 
+## 7b. Controllers — plug in & play
+
+Abyss seeds each emulator's controller config for **4 slots** on first launch, so couch co-op (up to 4 pads on one host) works out of the box. Player 1 also keeps a keyboard fallback (WASD + IJKL) on PCSX2/DuckStation.
+
+**Auto-detected on every emulator** (no setup needed):
+
+- Xbox 360 / One / Series — wired or wireless
+- PS4 DualShock 4 — via Steam Input or DS4Windows
+- PS5 DualSense — via Steam Input or DS4Windows
+- Switch Pro Controller — via Steam Input or BetterJoy
+- 8BitDo, Logitech F310/F710, Stadia, generic XInput pads
+
+**Native PS4/PS5 without Steam:**
+- **SDL-based emulators** (PCSX2, DuckStation, RetroArch + every libretro core, PPSSPP, Flycast) recognise them directly via SDL's gamepad database — works straight away.
+- **Dolphin** uses XInput, so a PS pad needs Steam Input or DS4Windows installed (both are free + one install — Steam Input is on automatically if you have Steam running).
+
+**Already customised your bindings?** Abyss never overwrites an existing config — only writes when the file is missing or has the upstream "keyboard-only" default. To reset: Settings → Diagnose & Repair → Run.
+
+**Couch co-op (2+ players, one PC):** plug pads 2/3/4 in before launch. Slot N binds to gamepad index N-1 automatically.
+
+---
+
 ## 8. BIOS / firmware — what you need for which console
 
 Abyss can't legally ship copyrighted BIOS files. Some emulators need one to run real games:

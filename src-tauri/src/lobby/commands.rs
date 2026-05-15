@@ -6,6 +6,7 @@ use tauri::{AppHandle, Manager, Runtime, State};
 
 use crate::chat::state as chat_state;
 use crate::chat::types::ChatProtocol;
+use crate::installer::controller_setup;
 use crate::library::cache;
 use crate::library::scanner;
 use crate::library::types::Platform;
@@ -204,6 +205,17 @@ async fn do_launch<R: Runtime>(
         .ok_or_else(|| format!("emulator {emulator_id} missing from config"))?;
     if emulator.exe.as_os_str().is_empty() {
         return Err(format!("emulator {} has no exe path set", emulator.name));
+    }
+
+    // Re-seed controller defaults before netplay launch. Crucial for
+    // members joining via auto-launch from a chat frame — they may
+    // never have opened the orchestration launch path and wouldn't have
+    // hit the same idempotent seed otherwise. Slot 1 (the local
+    // player on this PC) is what actually matters; SDL/XInput handle
+    // detection across Xbox/PS/8BitDo/etc.
+    let seeded = controller_setup::apply_all_defaults();
+    if !seeded.is_empty() {
+        log::info!("controller_setup: pre-netplay-launch seeded {:?}", seeded);
     }
 
     // 3. Build args. Phase 12 only wires netplay for RetroArch — every

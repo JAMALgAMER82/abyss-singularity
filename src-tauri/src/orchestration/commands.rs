@@ -8,6 +8,7 @@ use super::config;
 use super::launcher::{spawn_and_track, ProcessRegistry, SpawnRequest};
 use super::recipes::{builtin_recipes, expand_args};
 use super::types::{EmulatorEntry, LaunchHandle, OrchestrationConfig, RunningProcess};
+use crate::installer::controller_setup;
 use crate::library::cache;
 
 #[tauri::command]
@@ -71,6 +72,16 @@ pub async fn orch_launch<R: Runtime>(
             "emulator {} has no exe path set — choose one under Settings",
             emulator.name
         ));
+    }
+
+    // Re-seed per-emulator default controller bindings before every
+    // launch. Idempotent (no-op when the user already has a config) and
+    // covers the case where someone wipes their emulator config between
+    // install and play, or where the install-time seed never ran (older
+    // Abyss builds upgraded in place).
+    let seeded = controller_setup::apply_all_defaults();
+    if !seeded.is_empty() {
+        log::info!("controller_setup: pre-launch seeded {:?}", seeded);
     }
 
     // 3. Expand args and launch.

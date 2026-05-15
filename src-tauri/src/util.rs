@@ -30,13 +30,13 @@ pub fn silent_cmd_std(program: impl AsRef<std::ffi::OsStr>) -> std::process::Com
 }
 
 /// Tokio variant — same idea, for `.spawn()` / `.status()` / `.output()`
-/// callers that need an async-aware Command.
+/// callers that need an async-aware Command. Tokio exposes
+/// `creation_flags` directly on its Command (no std-trait import needed)
+/// when the `windows-process-extensions-creation-flags` feature is on
+/// (default for tokio ≥ 1.45).
 pub fn silent_cmd_tokio(program: impl AsRef<std::ffi::OsStr>) -> tokio::process::Command {
     let mut c = tokio::process::Command::new(program);
     #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        c.creation_flags(CREATE_NO_WINDOW);
-    }
+    c.creation_flags(CREATE_NO_WINDOW);
     c
 }

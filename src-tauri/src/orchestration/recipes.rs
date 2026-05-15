@@ -52,6 +52,7 @@ pub fn retroarch_core_for(platform: crate::library::types::Platform) -> Option<&
     })
 }
 
+#[allow(dead_code)] // Kept as documentation: see body comment for why SetParent embedding is disabled.
 pub fn is_embeddable(_emulator_id: &str) -> bool {
     // Win32 SetParent breaks rendering for every GPU-accelerated
     // emulator we ship: DXGI/D3D11 swap chains and Vulkan/OpenGL
