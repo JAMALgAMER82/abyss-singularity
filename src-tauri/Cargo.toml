@@ -1,6 +1,6 @@
 [package]
 name        = "abyss-singularity"
-version     = "0.1.0"
+version     = "0.2.0"
 description = "Cross-continental co-op gaming hub. By MasterMind George."
 authors     = ["MasterMind George"]
 edition     = "2021"

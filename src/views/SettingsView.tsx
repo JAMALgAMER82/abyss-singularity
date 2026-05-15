@@ -34,6 +34,7 @@ import { ControllerSection } from "../components/ControllerSection";
 import { AboutSection } from "../components/AboutSection";
 import { DiagnosticsSection } from "../components/DiagnosticsSection";
 import { DirectorySection } from "../components/DirectorySection";
+import { HelpSection } from "../components/HelpSection";
 
 export function SettingsView() {
   const [config, setConfig]   = useState<LibraryConfig | null>(null);
@@ -547,6 +548,9 @@ export function SettingsView() {
             {error}
           </p>
         )}
+
+        {/* ============================== USER GUIDE ============================ */}
+        <HelpSection />
 
         {/* ============================== DIRECTORY (Discover) ============================ */}
         <DirectorySection />
