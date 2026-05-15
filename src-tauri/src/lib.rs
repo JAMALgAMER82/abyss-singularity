@@ -104,6 +104,20 @@ pub fn run() {
             // restore the UI or quit fully.
             install_system_tray(app)?;
 
+            // Ensure SunshineService is set to auto-start AND currently
+            // running. Cheap (a couple of `sc` calls) and idempotent —
+            // no-ops if Sunshine isn't installed yet (auto-installer
+            // below will set it up) or if everything is already in the
+            // right state. Runs on a thread so a slow `sc query` can't
+            // block the setup callback.
+            std::thread::spawn(|| {
+                match installer::streaming_apps::ensure_sunshine_running() {
+                    Ok(true)  => log::info!("streaming: ensured Sunshine running on startup"),
+                    Ok(false) => {}
+                    Err(e)    => log::warn!("streaming: ensure_sunshine_running failed: {e:#}"),
+                }
+            });
+
             // Self-repair: re-scan emulator install folders and reconcile
             // the orchestration config. Picks up emulators that extracted
             // into a versioned subdir (Cemu) or that previously failed and

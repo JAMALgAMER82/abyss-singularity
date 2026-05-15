@@ -312,6 +312,76 @@ pub(crate) async fn autoset_sunshine_creds(_exe: &std::path::Path, _user: &str, 
     Err(anyhow::anyhow!("Sunshine auto-credential setup is Windows-only"))
 }
 
+/// Ensure SunshineService is configured to auto-start at boot AND is
+/// currently running. Idempotent: `sc config` is a no-op when already
+/// set to `auto`, `sc start` is a no-op when already running. Returns
+/// `Ok(true)` if we changed anything (started a stopped service or
+/// flipped the start type), `Ok(false)` if everything was already in
+/// the desired state, and `Err` only when both the service exists and
+/// we can't reach the desired state.
+///
+/// Called at app startup so a user who manually stopped the service
+/// (or whose first install of Sunshine didn't set it to auto) is
+/// back in business by the time they click Stream.
+#[cfg(target_os = "windows")]
+pub fn ensure_sunshine_running() -> Result<bool> {
+    let mut changed = false;
+    // 1. Query the service. If it doesn't exist, Sunshine isn't installed
+    //    yet — that's a "no-op success" because the streaming-apps auto-
+    //    installer will set it up later in the same launch.
+    let query = crate::util::silent_cmd_std("sc")
+        .args(["query", "SunshineService"])
+        .output()
+        .context("querying SunshineService state")?;
+    if !query.status.success() {
+        let stderr = String::from_utf8_lossy(&query.stderr);
+        if stderr.contains("does not exist") || stderr.contains("1060") {
+            log::info!("sunshine: service not installed yet — skipping ensure-running");
+            return Ok(false);
+        }
+        return Err(anyhow::anyhow!("sc query failed: {}", stderr.trim()));
+    }
+    let stdout = String::from_utf8_lossy(&query.stdout);
+
+    // 2. If not currently RUNNING, start it.
+    if !stdout.contains("STATE") || !stdout.contains("RUNNING") {
+        let out = crate::util::silent_cmd_std("sc")
+            .args(["start", "SunshineService"])
+            .output()
+            .context("starting SunshineService")?;
+        if out.status.success() {
+            log::info!("sunshine: started SunshineService on startup");
+            changed = true;
+        } else {
+            // 1056 = service already started; treat as success.
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            if !stderr.contains("1056") {
+                log::warn!("sunshine: sc start failed: {}", stderr.trim());
+            }
+        }
+    }
+
+    // 3. Make sure the service is set to auto-start at boot so the user
+    //    doesn't have to launch Abyss to bring Sunshine up. `sc qc` could
+    //    pre-check, but the `sc config` itself is idempotent enough that
+    //    we just run it unconditionally — costs ~30 ms.
+    let cfg = crate::util::silent_cmd_std("sc")
+        .args(["config", "SunshineService", "start=", "auto"])
+        .output()
+        .context("setting SunshineService start type to auto")?;
+    if !cfg.status.success() {
+        log::warn!(
+            "sunshine: sc config start=auto failed: {}",
+            String::from_utf8_lossy(&cfg.stderr).trim()
+        );
+    }
+
+    Ok(changed)
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn ensure_sunshine_running() -> Result<bool> { Ok(false) }
+
 /// Generate a 24-character alphanumeric password. We don't pull in the
 /// `rand` crate — sha2 + the high-res timer + the process ID is more than
 /// enough entropy for a host-local credential nobody outside this box
